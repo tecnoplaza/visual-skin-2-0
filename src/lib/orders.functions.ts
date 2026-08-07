@@ -1,0 +1,2404 @@
+// Secure order lifecycle server functions.
+// All order creation, price calculation, payment attempt handling and
+// state-machine transitions happen here. The browser never sends amounts
+// nor handles secrets.
+import { createServerFn } from "@tanstack/react-start";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import {
+  getCookie,
+  setCookie,
+  deleteCookie,
+  setResponseHeaders,
+} from "@tanstack/react-start/server";
+import { z } from "zod";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "crypto";
+import { getRequest } from "@tanstack/react-start/server";
+import {
+  assertSameOrigin,
+  assertCsrfToken,
+  generateCsrfToken,
+  hashCsrfToken,
+} from "@/lib/csrf";
+import {
+  getServerConfig,
+  getMercadoPagoConfig,
+  tryGetMercadoPagoConfig,
+  getPaymentsGateSummary,
+  assertProductionPaymentsConfigured,
+} from "@/lib/server-config";
+import { detectAndValidateImage, IMAGE_LIMITS } from "@/lib/image-parser";
+import {
+  enforceRateLimit,
+  hashBucketKey,
+  ipHashFromRequest,
+  RATE_LIMITS,
+} from "@/lib/rate-limit";
+
+// ------------------------------------------------------------------
+// Constants / helpers
+// ------------------------------------------------------------------
+
+const SESSION_COOKIE = "vs_order_sid";
+const SESSION_TTL_SECONDS = 60 * 60 * 24; // 24h sliding
+const SESSION_ABSOLUTE_TTL_SECONDS = 60 * 60 * 24 * 7; // 7d max
+const SESSION_RENEW_THRESHOLD_S = 60 * 30; // renew if <30m remaining
+
+function hashToken(raw: string): string {
+  return createHash("sha256").update(raw, "utf8").digest("hex");
+}
+
+function generateOpaqueToken(bytes = 32): string {
+  return randomBytes(bytes).toString("base64url");
+}
+
+function constantTimeEq(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+function getSiteOrigin(): string {
+  try {
+    return getServerConfig().siteOrigin;
+  } catch {
+    return "";
+  }
+}
+
+// Cálculo canónico de despacho (servidor). Lee shipping_config desde site_content
+// vía service-role y aplica la función pura. Falla cerrado si no hay configuración.
+async function computeCanonicalShipping(
+  packType: string,
+  deliveryMethod: "shipping" | "pickup",
+): Promise<{ amount: number; rule: string }> {
+  if (deliveryMethod === "pickup") return { amount: 0, rule: "shipping_disabled" };
+  const {
+    SHIPPING_CONFIG_KEY,
+    normalizeShippingConfig,
+    packTypeToItems,
+    calculateShippingAmount,
+  } = await import("@/lib/shipping");
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("site_content")
+    .select("value")
+    .eq("key", SHIPPING_CONFIG_KEY)
+    .maybeSingle();
+  if (error) {
+    throw new Error("No pudimos calcular el despacho. Inténtalo nuevamente.");
+  }
+  if (!data) {
+    throw new Error("No pudimos calcular el despacho. Inténtalo nuevamente.");
+  }
+  const cfg = normalizeShippingConfig(
+    (data.value ?? null) as Parameters<typeof normalizeShippingConfig>[0],
+  );
+  const result = calculateShippingAmount(packTypeToItems(packType), cfg);
+  return result;
+}
+
+
+// Common no-store headers for any endpoint that touches order-scoped data.
+function applyNoStoreHeaders() {
+  setResponseHeaders({
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  } as any);
+}
+
+// Canonical design storage path: {orderId}/{kind}-{uuid}.{ext}
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CANONICAL_PATH_RE =
+  /^([0-9a-f-]{36})\/(case|garment|secondary_garment)-([0-9a-f-]{36})\.(png|jpg|webp)$/i;
+
+type DesignKind = "case" | "garment" | "secondary_garment";
+
+function assertCanonicalDesignPath(
+  path: string,
+  orderId: string,
+  kind: DesignKind,
+): void {
+  if (path.length > 200) throw new Error("Ruta de diseño inválida");
+  if (/[\\\u0000-\u001f]/.test(path)) throw new Error("Ruta de diseño inválida");
+  if (path.includes("..") || path.includes("//")) {
+    throw new Error("Ruta de diseño inválida");
+  }
+  const m = CANONICAL_PATH_RE.exec(path);
+  if (!m) throw new Error("Ruta de diseño inválida");
+  if (m[1] !== orderId) throw new Error("Ruta no corresponde al pedido");
+  if (m[2].toLowerCase() !== kind) throw new Error("Tipo de diseño no coincide");
+  if (!UUID_RE.test(m[3])) throw new Error("Identificador de ruta inválido");
+}
+
+// Design JSON schema — bounded, no HTML/URLs, finite numbers only.
+// Required top-level: editor_schema_version, template_version, modelId, moldId.
+// Values are validated against the order server-side (see validateDesignJson).
+const layerNumber = z.number().finite().min(-100000).max(100000);
+const DesignLayer = z
+  .object({
+    x: layerNumber.default(0),
+    y: layerNumber.default(0),
+    rotate: z.number().finite().min(-3600).max(3600).default(0),
+    scale: z.number().finite().min(0.01).max(100).default(1),
+    width: z.number().finite().min(0).max(100000).optional(),
+    height: z.number().finite().min(0).max(100000).optional(),
+    assetRef: z.string().max(200).optional(),
+  })
+  .strict();
+
+const DesignJsonSchema = z
+  .object({
+    editor_schema_version: z.string().min(1).max(40),
+    template_version: z.string().min(1).max(40),
+    modelId: z.string().uuid(),
+    moldId: z.string().uuid(),
+    case: DesignLayer.optional(),
+    shirt: DesignLayer.optional(),
+    garment: DesignLayer.optional(),
+    secondary_garment: DesignLayer.optional(),
+  })
+  .strict();
+
+async function validateDesignJson(
+  input: unknown,
+  expected: {
+    orderId: string;
+    modelId: string;
+    allowGarment: boolean;
+    allowSecondaryGarment: boolean;
+  },
+): Promise<{ clean: Record<string, unknown>; versions: { editor: string; template: string; mold: string } }> {
+  const serialized = JSON.stringify(input ?? {});
+  if (serialized.length > 100 * 1024) {
+    throw new Error("Diseño demasiado grande");
+  }
+  if (/<script|<\/script|blob:|data:|javascript:|https?:\/\//i.test(serialized)) {
+    throw new Error("Diseño contiene contenido no permitido");
+  }
+  if (/[<>]/.test(serialized)) {
+    throw new Error("Diseño contiene marcado no permitido");
+  }
+  const parsed = DesignJsonSchema.parse(input);
+  if (parsed.modelId !== expected.modelId) {
+    throw new Error("El diseño no corresponde al modelo del pedido");
+  }
+  if (!expected.allowGarment && (parsed.shirt || parsed.garment)) {
+    throw new Error("Este pack no admite diseño de prenda");
+  }
+  if (!expected.allowSecondaryGarment && parsed.secondary_garment) {
+    throw new Error("Este pack no admite segunda prenda");
+  }
+
+  // §6/§9 assetRef must correspond to an authorization uploaded/finalized for
+  // this order and matching kind.
+  const layerRefs: Array<{ kind: DesignKind; ref: string }> = [];
+  if (parsed.case?.assetRef) layerRefs.push({ kind: "case", ref: parsed.case.assetRef });
+  if (parsed.shirt?.assetRef) layerRefs.push({ kind: "garment", ref: parsed.shirt.assetRef });
+  if (parsed.garment?.assetRef) layerRefs.push({ kind: "garment", ref: parsed.garment.assetRef });
+  if (parsed.secondary_garment?.assetRef) layerRefs.push({ kind: "secondary_garment", ref: parsed.secondary_garment.assetRef });
+  if (layerRefs.length > 0) {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: auths } = await supabaseAdmin
+      .from("order_upload_authorizations")
+      .select("storage_path,kind,status,expires_at")
+      .eq("order_id", expected.orderId)
+      .in("storage_path", layerRefs.map((r) => r.ref));
+    const now = Date.now();
+    for (const r of layerRefs) {
+      const row = (auths ?? []).find((a: any) => a.storage_path === r.ref);
+      if (!row) throw new Error(`assetRef no autorizado: ${r.kind}`);
+      if (row.kind !== r.kind) throw new Error(`assetRef con tipo incorrecto: ${r.kind}`);
+      if (!["uploaded", "finalized"].includes(row.status as string)) {
+        throw new Error(`assetRef no subido: ${r.kind}`);
+      }
+      if (new Date(row.expires_at as string).getTime() < now && row.status !== "finalized") {
+        throw new Error(`assetRef expirado: ${r.kind}`);
+      }
+    }
+  }
+
+  return {
+    clean: { ...parsed, validated_at: new Date().toISOString() },
+    versions: {
+      editor: parsed.editor_schema_version,
+      template: parsed.template_version,
+      mold: parsed.moldId,
+    },
+  };
+}
+
+
+
+
+// ------------------------------------------------------------------
+
+export type PaymentStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "refunded"
+  | "charged_back";
+
+const ALLOWED_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
+  pending: ["approved", "rejected", "cancelled"],
+  rejected: ["pending", "cancelled"],
+  cancelled: ["pending"],
+  approved: ["refunded", "charged_back"],
+  refunded: [],
+  charged_back: [],
+};
+
+export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
+  if (from === to) return true;
+  return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+export function mapMpStatus(s: string): PaymentStatus {
+  switch (s) {
+    case "approved":
+      return "approved";
+    case "in_process":
+    case "pending":
+    case "authorized":
+      return "pending";
+    case "rejected":
+      return "rejected";
+    case "cancelled":
+      return "cancelled";
+    case "refunded":
+      return "refunded";
+    case "charged_back":
+      return "charged_back";
+    default:
+      return "pending";
+  }
+}
+
+// ------------------------------------------------------------------
+// Input schemas
+// ------------------------------------------------------------------
+
+const PackType = z.enum([
+  "carcasa",
+  "carcasa+polera",
+  "carcasa+poleron",
+  "carcasa+polera+poleron",
+]);
+
+const CustomerSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().email().max(255),
+  phone: z.string().trim().min(4).max(40),
+  address: z.string().trim().min(3).max(255),
+  comuna: z.string().trim().min(1).max(120),
+  region: z.string().trim().min(1).max(120),
+  notes: z.string().trim().max(1000).optional().default(""),
+});
+
+const CreateOrderInput = z.object({
+  packId: z.string().uuid().nullable().optional(),
+  packType: PackType,
+  phoneModelId: z.string().uuid(),
+  brand: z.string().max(120).nullable().optional(),
+  garmentId: z.string().uuid().nullable().optional(),
+  garmentSize: z.string().max(20).nullable().optional(),
+  garmentColor: z.string().max(60).nullable().optional(),
+  secondaryGarmentId: z.string().uuid().nullable().optional(),
+  secondaryGarmentSize: z.string().max(20).nullable().optional(),
+  secondaryGarmentColor: z.string().max(60).nullable().optional(),
+  customer: CustomerSchema,
+  deliveryMethod: z.enum(["shipping", "pickup"]).default("shipping"),
+});
+
+// ------------------------------------------------------------------
+// createSecureOrder — creates the order and opens the HttpOnly cookie
+// session in the same call. No token in the URL.
+// ------------------------------------------------------------------
+
+export const createSecureOrder = createServerFn({ method: "POST" })
+  .inputValidator((i) => CreateOrderInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const req = getRequest();
+    await enforceRateLimit(
+      "create_order",
+      hashBucketKey("create_order_ip", ipHashFromRequest(req)),
+      RATE_LIMITS.create_order.limit,
+      RATE_LIMITS.create_order.window,
+    );
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    type PackRow = {
+      id: string;
+      pack_type: string;
+      price: number;
+      sale_price: number | null;
+      is_active: boolean;
+    };
+    let packRow: PackRow | null = null;
+
+    if (data.packId) {
+      const { data: p } = await supabaseAdmin
+        .from("promo_packs")
+        .select("id,pack_type,price,sale_price,is_active")
+        .eq("id", data.packId)
+        .maybeSingle();
+      if (!p) throw new Error("Pack no encontrado");
+      packRow = p as PackRow;
+    } else {
+      const { data: p } = await supabaseAdmin
+        .from("promo_packs")
+        .select("id,pack_type,price,sale_price,is_active")
+        .eq("pack_type", data.packType)
+        .eq("is_active", true)
+        .order("sort_order")
+        .limit(1)
+        .maybeSingle();
+      if (!p) throw new Error("Pack no disponible");
+      packRow = p as PackRow;
+    }
+    if (!packRow.is_active) throw new Error("Pack no disponible");
+    if (packRow.pack_type !== data.packType)
+      throw new Error("Tipo de pack no coincide");
+
+    // §8 Full catalog resolution — never trust client text.
+    const { data: model } = await supabaseAdmin
+      .from("phone_models")
+      .select("id,name,slug,is_active,mold_status,brand_id,print_area,mockup_url,mask_url,overlay_url")
+      .eq("id", data.phoneModelId)
+      .maybeSingle();
+    if (!model) throw new Error("Modelo no encontrado");
+    if (!model.is_active) throw new Error("Modelo inactivo");
+    if (model.mold_status !== "listo") throw new Error("Molde del modelo no está listo");
+    if (!model.print_area || typeof model.print_area !== "object") {
+      throw new Error("El modelo no tiene área de impresión configurada");
+    }
+    if (!model.mockup_url) throw new Error("El modelo no tiene mockup configurado");
+
+    const { data: brandRow } = await supabaseAdmin
+      .from("brands")
+      .select("id,name,is_active")
+      .eq("id", model.brand_id)
+      .maybeSingle();
+    if (!brandRow) throw new Error("Marca no encontrada");
+
+    // Pack compatibility: only "carcasa" allows no garment. Anything else
+    // requires a valid, active garment matching the pack type.
+    const isCaseOnly = packRow.pack_type === "carcasa";
+    const isCompletePack = packRow.pack_type === "carcasa+polera+poleron";
+    type GarmentRow = {
+      id: string; type: string; name: string; color: string; sizes: string[];
+      price: number; is_active: boolean; mold_status: string; view: string;
+      mockup_url: string | null; base_url: string | null; overlay_url: string | null;
+      preview_url: string | null; print_area: unknown;
+      source_width: number | null; source_height: number | null;
+    };
+    const { isValidGarmentPrintArea } = await import("@/lib/garment-model");
+    async function resolveGarmentById(
+      garmentId: string,
+      expectedType: "polera" | "poleron",
+      requestedSize: string | null | undefined,
+      fieldPrefix: "GARMENT" | "SECONDARY_GARMENT",
+    ): Promise<{ row: GarmentRow; canonicalSize: string }> {
+      const { data: g } = await supabaseAdmin
+        .from("garments")
+        .select("id,type,name,color,sizes,price,is_active,mold_status,view,mockup_url,base_url,overlay_url,preview_url,print_area,source_width,source_height")
+        .eq("id", garmentId)
+        .maybeSingle();
+      if (!g) throw new Error(`${fieldPrefix}_NOT_AVAILABLE`);
+      const gr = g as GarmentRow;
+      if (
+        gr.id !== garmentId ||
+        gr.type !== expectedType ||
+        !gr.is_active ||
+        gr.mold_status !== "listo" ||
+        gr.view !== "front" ||
+        !gr.mockup_url ||
+        !isValidGarmentPrintArea(gr.print_area)
+      ) {
+        throw new Error(`${fieldPrefix}_NOT_AVAILABLE`);
+      }
+      const sizesNorm = gr.sizes.map((s) => s.trim().toUpperCase());
+      const rawSize = (requestedSize ?? "").trim();
+      if (!rawSize) throw new Error(`INVALID_${fieldPrefix}_SIZE`);
+      const sizeIdx = sizesNorm.indexOf(rawSize.toUpperCase());
+      if (sizeIdx === -1) throw new Error(`INVALID_${fieldPrefix}_SIZE`);
+      return { row: gr, canonicalSize: gr.sizes[sizeIdx] };
+    }
+
+    let garmentRow: GarmentRow | null = null;
+    let secondaryGarmentRow: GarmentRow | null = null;
+    let canonicalGarmentSize: string | null = null;
+    let canonicalSecondarySize: string | null = null;
+
+    const hasAnyGarmentField =
+      data.garmentId != null || data.garmentSize != null || data.garmentColor != null;
+    const hasAnySecondaryField =
+      data.secondaryGarmentId != null ||
+      data.secondaryGarmentSize != null ||
+      data.secondaryGarmentColor != null;
+
+    if (isCaseOnly) {
+      if (hasAnyGarmentField || hasAnySecondaryField) {
+        throw new Error("INVALID_GARMENT_FIELDS_FOR_CASE_ONLY_PACK");
+      }
+    } else if (isCompletePack) {
+      if (hasAnySecondaryField && !data.secondaryGarmentId) {
+        throw new Error("SECONDARY_GARMENT_ID_REQUIRED");
+      }
+      if (!data.garmentId) throw new Error("GARMENT_ID_REQUIRED");
+      if (!data.secondaryGarmentId) throw new Error("SECONDARY_GARMENT_ID_REQUIRED");
+      if (data.garmentId === data.secondaryGarmentId) {
+        throw new Error("GARMENT_IDS_MUST_DIFFER");
+      }
+      const primary = await resolveGarmentById(
+        data.garmentId, "polera", data.garmentSize, "GARMENT",
+      );
+      const secondary = await resolveGarmentById(
+        data.secondaryGarmentId, "poleron", data.secondaryGarmentSize, "SECONDARY_GARMENT",
+      );
+      garmentRow = primary.row;
+      canonicalGarmentSize = primary.canonicalSize;
+      secondaryGarmentRow = secondary.row;
+      canonicalSecondarySize = secondary.canonicalSize;
+      data.garmentSize = canonicalGarmentSize;
+      data.garmentColor = garmentRow.color;
+      data.secondaryGarmentSize = canonicalSecondarySize;
+      data.secondaryGarmentColor = secondaryGarmentRow.color;
+    } else {
+      // carcasa+polera or carcasa+poleron
+      if (hasAnySecondaryField) {
+        throw new Error("INVALID_SECONDARY_GARMENT_FIELDS");
+      }
+      const expectedType = packRow.pack_type === "carcasa+polera" ? "polera" : "poleron";
+      if (!data.garmentId) throw new Error("GARMENT_ID_REQUIRED");
+      const primary = await resolveGarmentById(
+        data.garmentId, expectedType, data.garmentSize, "GARMENT",
+      );
+      garmentRow = primary.row;
+      canonicalGarmentSize = primary.canonicalSize;
+      data.garmentSize = canonicalGarmentSize;
+      data.garmentColor = garmentRow.color;
+    }
+
+    const basePrice = Number(packRow.price);
+    const effective =
+      packRow.sale_price != null ? Number(packRow.sale_price) : basePrice;
+    const subtotal = Math.round(effective);
+    const discount = Math.max(0, Math.round(basePrice - effective));
+    const shippingResult = await computeCanonicalShipping(
+      data.packType,
+      data.deliveryMethod,
+    );
+    const shipping = shippingResult.amount;
+    const total = subtotal + shipping;
+    if (total <= 0) throw new Error("Total inválido");
+
+    const { data: numRow } = await supabaseAdmin.rpc("next_order_number");
+    if (!numRow) throw new Error("No se pudo generar el número de pedido");
+    const orderNumber = numRow as unknown as string;
+    const publicToken = generateOpaqueToken();
+    const tokenHash = hashToken(publicToken);
+
+    function garmentSnapshot(row: GarmentRow | null, size: string | null) {
+      if (!row) return null;
+      return {
+        id: row.id,
+        type: row.type,
+        name: row.name,
+        color: row.color,
+        size,
+        view: row.view,
+        print_area: row.print_area,
+        base_url: row.base_url,
+        overlay_url: row.overlay_url,
+        mockup_url: row.mockup_url,
+        preview_url: row.preview_url,
+        source_width: row.source_width,
+        source_height: row.source_height,
+      };
+    }
+
+    const catalogSnapshot = {
+      pack: {
+        id: packRow.id,
+        type: packRow.pack_type,
+        price: basePrice,
+        sale_price: packRow.sale_price ?? null,
+      },
+      brand: { id: brandRow.id, name: brandRow.name },
+      model: {
+        id: model.id,
+        name: model.name,
+        slug: model.slug,
+        mold_status: model.mold_status,
+        print_area: model.print_area,
+      },
+      garment: garmentSnapshot(garmentRow, canonicalGarmentSize),
+      secondaryGarment: garmentSnapshot(secondaryGarmentRow, canonicalSecondarySize),
+      shipping: { rule: shippingResult.rule, amount: shipping },
+      captured_at: new Date().toISOString(),
+    };
+
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from("custom_orders")
+      .insert({
+        order_number: orderNumber,
+        public_access_token_hash: tokenHash,
+        pack_id: packRow.id,
+        pack_type: data.packType,
+        brand: brandRow.name,
+        brand_id: brandRow.id,
+        phone_model: model.name,
+        phone_model_id: model.id,
+        garment_id: garmentRow?.id ?? null,
+        garment_size: garmentRow ? canonicalGarmentSize : null,
+        garment_color: garmentRow ? garmentRow.color : null,
+        secondary_garment_id: secondaryGarmentRow?.id ?? null,
+        secondary_garment_size: secondaryGarmentRow ? canonicalSecondarySize : null,
+        secondary_garment_color: secondaryGarmentRow ? secondaryGarmentRow.color : null,
+        customer_name: data.customer.name,
+        customer_email: data.customer.email,
+        customer_phone: data.customer.phone,
+        shipping_address: {
+          address: data.customer.address,
+          comuna: data.customer.comuna,
+          region: data.customer.region,
+          notes: data.customer.notes ?? "",
+          delivery_method: data.deliveryMethod,
+        },
+        notes: data.customer.notes || null,
+        subtotal_amount: subtotal,
+        discount_amount: discount,
+        shipping_amount: shipping,
+        total_amount: total,
+        currency: "CLP",
+        status: "pendiente_pago",
+        payment_status: "pending",
+        fulfillment_status: "new",
+        payment_provider: "mercadopago",
+        design_status: "pending",
+        catalog_snapshot: catalogSnapshot,
+        payment_environment: getServerConfig().mpEnv,
+        is_live_mode: getServerConfig().isLiveMode,
+      } as any)
+      .select("id,order_number")
+      .single();
+
+
+    if (insErr || !inserted) {
+      console.error("[createSecureOrder] insert failed", insErr?.message);
+      throw new Error("No se pudo crear el pedido");
+    }
+
+    const sessionToken = generateOpaqueToken(32);
+    const sessionHash = hashToken(sessionToken);
+    const csrfToken = generateCsrfToken();
+    const csrfHash = hashCsrfToken(csrfToken);
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
+    const absExp = new Date(Date.now() + SESSION_ABSOLUTE_TTL_SECONDS * 1000);
+    const { data: sessRow, error: sessErr } = await supabaseAdmin
+      .from("payment_sessions")
+      .insert({
+        order_id: inserted.id,
+        session_token_hash: sessionHash,
+        csrf_token_hash: csrfHash,
+        expires_at: expiresAt.toISOString(),
+        absolute_expires_at: absExp.toISOString(),
+      } as any)
+      .select("id")
+      .single();
+    if (sessErr || !sessRow) {
+      console.error("[createSecureOrder] session insert failed", sessErr?.message);
+      throw new Error("No se pudo iniciar la sesión del pedido");
+    }
+    setCookie(SESSION_COOKIE, sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_TTL_SECONDS,
+    });
+
+    const { issueSignedCsrfToken } = await import("@/lib/csrf-signed");
+    const signedCsrf = issueSignedCsrfToken(
+      (sessRow as { id: string }).id,
+      inserted.id,
+    );
+
+    return {
+      id: inserted.id,
+      orderNumber: inserted.order_number,
+      csrfToken: signedCsrf,
+    };
+  });
+
+// ------------------------------------------------------------------
+// Design upload lifecycle: signed URLs into a private bucket,
+// session-scoped, path-validated.
+// ------------------------------------------------------------------
+
+const DESIGN_BUCKET = "order-designs";
+const DESIGN_MAX_BYTES = 15 * 1024 * 1024;
+const DESIGN_ALLOWED_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
+const DESIGN_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+const RequestUploadInput = z.object({
+  orderId: z.string().uuid(),
+  kind: z.enum(["case", "garment", "secondary_garment"]),
+  contentType: z.string().max(80),
+  size: z.number().int().positive().max(DESIGN_MAX_BYTES),
+});
+
+// Design is mutable only when the order is not in a locked payment state,
+// the design itself is not locked (payment attempt in progress), and there is
+// no active/awaiting_reconciliation payment attempt.
+async function assertDesignMutable(orderId: string): Promise<void> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: order } = await supabaseAdmin
+    .from("custom_orders")
+    .select("id,payment_status,design_status")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (!order) throw new Error("Pedido no encontrado");
+  const ps = order.payment_status as PaymentStatus;
+  if (ps === "approved" || ps === "refunded" || ps === "charged_back") {
+    throw new Error("Pedido en estado bloqueado; el diseño no puede modificarse");
+  }
+  const ds = (order as any).design_status as string;
+  if (ds === "locked") {
+    throw new Error("Diseño bloqueado por un pago en curso");
+  }
+  const { data: active } = await supabaseAdmin
+    .from("payment_attempts")
+    .select("id")
+    .eq("order_id", orderId)
+    .in("status", ["processing", "pending", "awaiting_reconciliation"])
+    .maybeSingle();
+  if (active) throw new Error("Hay un intento de pago activo; el diseño no puede modificarse");
+}
+
+export const requestDesignUpload = createServerFn({ method: "POST" })
+  .inputValidator((i) => RequestUploadInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+    await enforceRateLimit(
+      "request_upload",
+      hashBucketKey("request_upload_order", orderId),
+      RATE_LIMITS.request_upload.limit,
+      RATE_LIMITS.request_upload.window,
+    );
+    if (!DESIGN_ALLOWED_MIME.has(data.contentType)) {
+      throw new Error("Tipo de archivo no permitido");
+    }
+    await assertDesignMutable(orderId);
+    const ext = DESIGN_EXT[data.contentType]!;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const path = `${orderId}/${data.kind}-${randomUUID()}.${ext}`;
+
+    // §6 Record the authorization BEFORE issuing the signed URL — the
+    // finalize step will verify this row and refuse any path not present.
+    const { data: authIdRaw, error: authErr } = await supabaseAdmin.rpc(
+      "issue_upload_authorization" as any,
+      {
+        p_order_id: orderId,
+        p_session_id: sess.sessionId,
+        p_kind: data.kind,
+        p_storage_path: path,
+        p_declared_mime: data.contentType,
+        p_declared_size: data.size,
+        p_ttl_seconds: 30 * 60,
+      } as any,
+    );
+    if (authErr || !authIdRaw) {
+      console.error("[requestDesignUpload] auth insert", authErr?.message);
+      throw new Error("No se pudo autorizar la subida");
+    }
+
+    const { data: signed, error } = await (supabaseAdmin.storage
+      .from(DESIGN_BUCKET) as any).createSignedUploadUrl(path);
+    if (error || !signed) {
+      console.error("[requestDesignUpload] sign failed", error?.message);
+      await supabaseAdmin.rpc("reject_upload_authorization" as any, {
+        p_storage_path: path,
+        p_reason: "sign_failed",
+      } as any);
+      await supabaseAdmin
+        .from("custom_orders")
+        .update({ design_status: "failed" } as any)
+        .eq("id", orderId);
+      throw new Error("No se pudo autorizar la subida");
+    }
+
+    await supabaseAdmin
+      .from("custom_orders")
+      .update({ design_status: "uploading" } as any)
+      .eq("id", orderId);
+
+    return {
+      path: signed.path as string,
+      token: signed.token as string,
+      bucket: DESIGN_BUCKET,
+    };
+  });
+
+const FinalizeInput = z.object({
+  orderId: z.string().uuid(),
+  casePath: z.string().min(1).max(300),
+  garmentPath: z.string().min(1).max(300).nullable().optional(),
+  secondaryGarmentPath: z.string().min(1).max(300).nullable().optional(),
+  designJson: z.record(z.unknown()).optional().default({}),
+});
+
+export const finalizeOrderDesigns = createServerFn({ method: "POST" })
+  .inputValidator((i) => FinalizeInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+    await enforceRateLimit(
+      "finalize_design",
+      hashBucketKey("finalize_design_order", orderId),
+      RATE_LIMITS.finalize_design.limit,
+      RATE_LIMITS.finalize_design.window,
+    );
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    // Resolve pack_type securely BEFORE choosing the RPC route.
+    const { data: orderRow } = await supabaseAdmin
+      .from("custom_orders")
+      .select("id,phone_model_id,pack_type")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (!orderRow) throw new Error("Pedido no encontrado");
+    const packType = (orderRow as any).pack_type as string;
+    const isCompletePack = packType === "carcasa+polera+poleron";
+    const allowGarment = packType !== "carcasa";
+    const allowSecondaryGarment = isCompletePack;
+
+    // Canonical structure: {orderId}/{kind}-{uuid}.{ext}
+    assertCanonicalDesignPath(data.casePath, orderId, "case");
+    if (data.garmentPath) {
+      assertCanonicalDesignPath(data.garmentPath, orderId, "garment");
+    }
+    if (data.secondaryGarmentPath) {
+      assertCanonicalDesignPath(data.secondaryGarmentPath, orderId, "secondary_garment");
+    }
+
+    if (!allowGarment && data.garmentPath) {
+      throw new Error("Este pack no admite prenda");
+    }
+    if (!allowSecondaryGarment && data.secondaryGarmentPath) {
+      throw new Error("Este pack no admite segunda prenda");
+    }
+    if (isCompletePack) {
+      if (!data.garmentPath) throw new Error("GARMENT_PATH_REQUIRED");
+      if (!data.secondaryGarmentPath) throw new Error("SECONDARY_GARMENT_PATH_REQUIRED");
+    }
+    if (
+      data.garmentPath &&
+      (data.garmentPath === data.casePath ||
+        data.garmentPath === data.secondaryGarmentPath)
+    ) {
+      throw new Error("Rutas de diseño duplicadas");
+    }
+    if (
+      data.secondaryGarmentPath &&
+      data.secondaryGarmentPath === data.casePath
+    ) {
+      throw new Error("Rutas de diseño duplicadas");
+    }
+
+    // Rejects if the design is locked or there is an active payment attempt.
+    await assertDesignMutable(orderId);
+
+    type DetectedDims = { width: number; height: number; format: string };
+    let lowResolution = false;
+    const detected: Record<DesignKind, DetectedDims | null> = {
+      case: null,
+      garment: null,
+      secondary_garment: null,
+    };
+
+    async function ensureObject(path: string, kind: DesignKind) {
+      const parts = path.split("/");
+      const filename = parts.pop()!;
+      const dir = parts.join("/");
+      const { data: list, error } = await supabaseAdmin.storage
+        .from(DESIGN_BUCKET)
+        .list(dir, { limit: 100, search: filename });
+      if (error) throw new Error("No se pudo verificar la subida");
+      const row = list?.find((r) => r.name === filename);
+      if (!row) throw new Error("Archivo no encontrado en el bucket");
+      const meta = row.metadata as { size?: number; mimetype?: string } | null;
+      const declaredMime = meta?.mimetype ?? "";
+      if (meta?.size && meta.size > IMAGE_LIMITS.MAX_BYTES) {
+        throw new Error("Archivo demasiado grande");
+      }
+      const { data: blob, error: dlErr } = await supabaseAdmin.storage
+        .from(DESIGN_BUCKET)
+        .download(path);
+      if (dlErr || !blob) throw new Error("No se pudo verificar el contenido");
+      const totalBytes = (blob as Blob).size ?? 0;
+      const head = new Uint8Array(await (blob as Blob).arrayBuffer());
+      const ext = (path.split(".").pop() ?? "").toLowerCase();
+      const result = detectAndValidateImage(head, totalBytes, declaredMime, ext);
+
+      if (!result.ok) {
+        throw new Error(`image_${result.code}`);
+      }
+      detected[kind] = {
+        width: result.image.width,
+        height: result.image.height,
+        format: result.image.format,
+      };
+      if (result.warnings.lowResolution) lowResolution = true;
+
+      const { data: consumed, error: cErr } = await supabaseAdmin.rpc(
+        "consume_upload_authorization" as any,
+        {
+          p_storage_path: path,
+          p_order_id: orderId,
+          p_kind: kind,
+          p_detected_format: result.image.format,
+          p_detected_width: result.image.width,
+          p_detected_height: result.image.height,
+        } as any,
+      );
+      if (cErr) throw new Error("No se pudo consumir la autorización");
+      const cRes = consumed as { ok: boolean; code?: string };
+      if (!cRes?.ok) throw new Error(`auth_${cRes?.code ?? "unknown"}`);
+    }
+
+    async function rejectAndCleanup(reason: string) {
+      const toRemove = [data.casePath];
+      if (data.garmentPath) toRemove.push(data.garmentPath);
+      if (data.secondaryGarmentPath) toRemove.push(data.secondaryGarmentPath);
+      await supabaseAdmin.storage.from(DESIGN_BUCKET).remove(toRemove).catch(() => {});
+      for (const p of toRemove) {
+        await supabaseAdmin.rpc("reject_upload_authorization" as any, {
+          p_storage_path: p,
+          p_reason: reason,
+        } as any);
+      }
+      await supabaseAdmin
+        .from("custom_orders")
+        .update({ design_status: "failed" } as any)
+        .eq("id", orderId);
+    }
+
+    try {
+      await ensureObject(data.casePath, "case");
+      if (data.garmentPath) await ensureObject(data.garmentPath, "garment");
+      if (data.secondaryGarmentPath) {
+        await ensureObject(data.secondaryGarmentPath, "secondary_garment");
+      }
+    } catch (e) {
+      await rejectAndCleanup((e as Error)?.message ?? "validation_failed");
+      throw e;
+    }
+
+    let cleanDesign: Record<string, unknown>;
+    let versions: { editor: string; template: string; mold: string };
+    try {
+      const validated = await validateDesignJson(data.designJson, {
+        orderId,
+        modelId: (orderRow as any).phone_model_id ?? "",
+        allowGarment,
+        allowSecondaryGarment,
+      });
+      cleanDesign = validated.clean;
+      versions = validated.versions;
+    } catch (e) {
+      await rejectAndCleanup(`design_json_${(e as Error)?.message ?? "invalid"}`.slice(0, 200));
+      throw e;
+    }
+
+    const caseDesign = (cleanDesign as any)?.case ?? null;
+    const garmentDesign =
+      (cleanDesign as any)?.shirt ?? (cleanDesign as any)?.garment ?? null;
+    const secondaryGarmentDesign =
+      (cleanDesign as any)?.secondary_garment ?? null;
+    const metadata: Record<string, unknown> = {
+      editor_schema_version: versions.editor,
+      template_version: versions.template,
+      mold_version: versions.mold,
+      low_resolution_warning: lowResolution,
+      case_dimensions: detected.case ?? {},
+      garment_dimensions: detected.garment ?? {},
+    };
+    if (isCompletePack) {
+      metadata.secondary_garment_dimensions = detected.secondary_garment ?? {};
+    }
+
+    if (isCompletePack) {
+      const { data: finRaw, error: finErr } = await supabaseAdmin.rpc(
+        "finalize_order_designs_v3" as any,
+        {
+          p_order_id: orderId,
+          p_case_path: data.casePath,
+          p_garment_path: data.garmentPath ?? null,
+          p_secondary_garment_path: data.secondaryGarmentPath ?? null,
+          p_case_design: caseDesign,
+          p_garment_design: garmentDesign,
+          p_secondary_garment_design: secondaryGarmentDesign,
+          p_bucket: DESIGN_BUCKET,
+          p_metadata: metadata,
+        } as any,
+      );
+      if (finErr || !(finRaw as any)?.ok) {
+        console.error("[finalizeOrderDesigns v3] rpc", finErr?.message);
+        throw new Error("No se pudo finalizar el pedido");
+      }
+    } else {
+      const { data: finRaw, error: finErr } = await supabaseAdmin.rpc(
+        "finalize_order_designs" as any,
+        {
+          p_order_id: orderId,
+          p_case_path: data.casePath,
+          p_garment_path: data.garmentPath ?? null,
+          p_case_design: caseDesign,
+          p_garment_design: garmentDesign,
+          p_bucket: DESIGN_BUCKET,
+          p_metadata: metadata,
+        } as any,
+      );
+      if (finErr || !(finRaw as any)?.ok) {
+        console.error("[finalizeOrderDesigns] rpc", finErr?.message);
+        throw new Error("No se pudo finalizar el pedido");
+      }
+    }
+
+    return { ok: true as const, lowResolution };
+  });
+
+
+const MarkFailedInput = z.object({ orderId: z.string().uuid() });
+export const markOrderDesignFailed = createServerFn({ method: "POST" })
+  .inputValidator((i) => MarkFailedInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+    await enforceRateLimit(
+      "mark_failed",
+      hashBucketKey("mark_failed_order", orderId),
+      RATE_LIMITS.mark_failed.limit,
+      RATE_LIMITS.mark_failed.window,
+    );
+    await assertDesignMutable(orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    await supabaseAdmin
+      .from("custom_orders")
+      .update({ design_status: "failed" } as any)
+      .eq("id", orderId);
+    return { ok: true as const };
+  });
+
+const UnlockDesignInput = z.object({ orderId: z.string().uuid() });
+export const unlockOrderDesign = createServerFn({ method: "POST" })
+  .inputValidator((i) => UnlockDesignInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rpc, error } = await supabaseAdmin.rpc(
+      "unlock_order_design" as any,
+      { p_order_id: orderId } as any,
+    );
+    if (error) {
+      console.error("[unlockOrderDesign]", error.message);
+      throw new Error("No se pudo desbloquear el diseño");
+    }
+    return rpc as { ok: boolean; code: string; design_status?: string };
+  });
+
+// ------------------------------------------------------------------
+// Session exchange (cookie-based)
+// ------------------------------------------------------------------
+// The client opens /pedido/:id?token=XXX once. This function verifies the
+// token, creates a short-lived session bound to that single order, sets an
+// HttpOnly cookie and returns. The client then removes the token from the URL.
+
+const ExchangeInput = z.object({
+  orderId: z.string().uuid(),
+  token: z.string().min(20).max(200),
+});
+
+// Persistent rate limits now via public.rate_limits + consume_rate_limit.
+// (In-memory helpers removed — they were per-worker and could be bypassed.)
+
+export const exchangeOrderToken = createServerFn({ method: "POST" })
+  .inputValidator((i) => ExchangeInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    await enforceRateLimit(
+      "exchange_token",
+      hashBucketKey("exchange_token_order", data.orderId),
+      RATE_LIMITS.exchange_token.limit,
+      RATE_LIMITS.exchange_token.window,
+    );
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order } = await supabaseAdmin
+      .from("custom_orders")
+      .select("id,public_access_token_hash")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (!order?.public_access_token_hash) throw new Error("Token inválido");
+    const provided = hashToken(data.token);
+    if (!constantTimeEq(order.public_access_token_hash, provided)) {
+      throw new Error("Token inválido");
+    }
+
+    const sessionToken = generateOpaqueToken(32);
+    const sessionHash = hashToken(sessionToken);
+    const csrfToken = generateCsrfToken();
+    const csrfHash = hashCsrfToken(csrfToken);
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
+    const absExp = new Date(Date.now() + SESSION_ABSOLUTE_TTL_SECONDS * 1000);
+
+    const { data: sessRow, error: insErr } = await supabaseAdmin
+      .from("payment_sessions")
+      .insert({
+        order_id: order.id,
+        session_token_hash: sessionHash,
+        csrf_token_hash: csrfHash,
+        expires_at: expiresAt.toISOString(),
+        absolute_expires_at: absExp.toISOString(),
+      } as any)
+      .select("id")
+      .single();
+    if (insErr || !sessRow) throw new Error("No se pudo iniciar la sesión del pedido");
+
+    setCookie(SESSION_COOKIE, sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_TTL_SECONDS,
+    });
+
+    const { issueSignedCsrfToken } = await import("@/lib/csrf-signed");
+    const signedCsrf = issueSignedCsrfToken(
+      (sessRow as { id: string }).id,
+      order.id,
+    );
+    return { ok: true as const, orderId: order.id, csrfToken: signedCsrf };
+  });
+
+// Resolve a valid session for a given orderId. Returns id + csrf hash.
+async function requireOrderSessionWithId(
+  orderId: string,
+): Promise<{ orderId: string; sessionId: string; csrfTokenHash: string | null }> {
+  const raw = getCookie(SESSION_COOKIE);
+  if (!raw) throw new Error("Sesión no encontrada");
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const hash = hashToken(raw);
+  const { data: session } = await supabaseAdmin
+    .from("payment_sessions")
+    .select(
+      "id,order_id,expires_at,absolute_expires_at,revoked_at,csrf_token_hash",
+    )
+    .eq("session_token_hash", hash)
+    .maybeSingle();
+  if (!session) throw new Error("Sesión inválida");
+  const s = session as any;
+  if (s.revoked_at) throw new Error("Sesión revocada");
+  const now = Date.now();
+  if (new Date(s.expires_at).getTime() < now) throw new Error("Sesión expirada");
+  if (s.absolute_expires_at && new Date(s.absolute_expires_at).getTime() < now) {
+    throw new Error("Sesión expirada");
+  }
+  if (s.order_id !== orderId) throw new Error("Sesión no autorizada");
+
+  // Sliding renewal, capped by absolute_expires_at.
+  const remaining = new Date(s.expires_at).getTime() - now;
+  const absCap = s.absolute_expires_at
+    ? new Date(s.absolute_expires_at).getTime()
+    : now + SESSION_ABSOLUTE_TTL_SECONDS * 1000;
+  const patch: Record<string, string> = { last_seen_at: new Date(now).toISOString() };
+  if (remaining < SESSION_RENEW_THRESHOLD_S * 1000) {
+    const newExp = Math.min(now + SESSION_TTL_SECONDS * 1000, absCap);
+    patch.expires_at = new Date(newExp).toISOString();
+  }
+  await supabaseAdmin.from("payment_sessions").update(patch as any).eq("id", s.id);
+  return {
+    orderId: s.order_id,
+    sessionId: s.id,
+    csrfTokenHash: (s.csrf_token_hash as string | null) ?? null,
+  };
+}
+
+async function requireOrderSession(orderId: string): Promise<string> {
+  const s = await requireOrderSessionWithId(orderId);
+  return s.orderId;
+}
+
+/** Convenience: load session + enforce CSRF header for mutating fns. */
+async function requireOrderSessionAndCsrf(
+  orderId: string,
+): Promise<{ orderId: string; sessionId: string }> {
+  const s = await requireOrderSessionWithId(orderId);
+  assertCsrfToken(s.csrfTokenHash, { sessionId: s.sessionId, orderId: s.orderId });
+  return { orderId: s.orderId, sessionId: s.sessionId };
+}
+
+
+const OrderIdInput = z.object({ orderId: z.string().uuid() });
+
+export const clearOrderSession = createServerFn({ method: "POST" })
+  .handler(async () => {
+    applyNoStoreHeaders();
+    // Revoke session server-side, not just delete the cookie.
+    const raw = getCookie(SESSION_COOKIE);
+    if (raw) {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const hash = hashToken(raw);
+      const { data: s } = await supabaseAdmin
+        .from("payment_sessions")
+        .select("id")
+        .eq("session_token_hash", hash)
+        .maybeSingle();
+      if (s?.id) {
+        await supabaseAdmin.rpc("revoke_session" as any, { p_session_id: s.id } as any);
+      }
+    }
+    deleteCookie(SESSION_COOKIE, { path: "/" });
+    return { ok: true };
+  });
+
+/**
+ * Returns a signed CSRF token bound to (sessionId, orderId). Stateless — does
+ * not rotate any per-session hash, so multiple tabs and reloads coexist.
+ * Cookie-only auth; no header required.
+ */
+export const getOrderCsrfToken = createServerFn({ method: "POST" })
+  .inputValidator((i) => OrderIdInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionWithId(data.orderId);
+    const { issueSignedCsrfToken } = await import("@/lib/csrf-signed");
+    const csrfToken = issueSignedCsrfToken(sess.sessionId, data.orderId);
+    return { csrfToken };
+  });
+
+// ------------------------------------------------------------------
+// getOrderBySession — read via cookie
+// ------------------------------------------------------------------
+
+export const getOrderBySession = createServerFn({ method: "POST" })
+  .inputValidator((i) => OrderIdInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const orderId = await requireOrderSession(data.orderId);
+    await enforceRateLimit(
+      "order_read",
+      hashBucketKey("order_read", orderId),
+      RATE_LIMITS.order_read.limit,
+      RATE_LIMITS.order_read.window,
+    );
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order, error } = await supabaseAdmin
+      .from("custom_orders")
+      .select(
+        "id,order_number,pack_type,brand,phone_model,garment_size,garment_color,customer_name,customer_email,customer_phone,shipping_address,case_design_url,garment_design_url,case_file_path,garment_file_path,secondary_garment_size,secondary_garment_color,secondary_garment_design_url,secondary_garment_file_path,design_status,notes,subtotal_amount,discount_amount,shipping_amount,total_amount,currency,payment_status,fulfillment_status,mp_payment_id,payment_environment,is_live_mode,created_at,catalog_snapshot,legal_accepted_at,legal_acceptance_hash",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+    if (error || !order) throw new Error("Pedido no encontrado");
+
+    // §4 Active attempt now INCLUDES awaiting_reconciliation.
+    const { data: active } = await supabaseAdmin
+      .from("payment_attempts")
+      .select("id,status")
+      .eq("order_id", orderId)
+      .in("status", ["processing", "pending", "awaiting_reconciliation"])
+      .maybeSingle();
+
+    // Sign short-lived read URLs for private design paths. Fall back to
+    // legacy public URL columns only when no path is stored (old orders).
+    async function signPath(path: string | null): Promise<string | null> {
+      if (!path) return null;
+      const { data: s } = await (supabaseAdmin.storage
+        .from(DESIGN_BUCKET) as any).createSignedUrl(path, 60 * 10);
+      return (s?.signedUrl as string) ?? null;
+    }
+    const orderRow = order as any;
+    const caseUrl =
+      (await signPath(orderRow.case_file_path ?? null)) ??
+      orderRow.case_design_url ?? null;
+    const garmentUrl =
+      (await signPath(orderRow.garment_file_path ?? null)) ??
+      orderRow.garment_design_url ?? null;
+    const secondaryGarmentUrl =
+      (await signPath(orderRow.secondary_garment_file_path ?? null)) ??
+      orderRow.secondary_garment_design_url ?? null;
+
+    // Do not leak internal storage paths to the browser.
+    delete orderRow.case_file_path;
+    delete orderRow.garment_file_path;
+    delete orderRow.secondary_garment_file_path;
+
+    // §4 canRetryPayment — single source of truth. The FE must not deduce
+    // this from separate flags; it should read this boolean.
+    const cfg = getServerConfig();
+    const mpCfg = tryGetMercadoPagoConfig();
+    const orderEnv = (orderRow.payment_environment ?? "test") as
+      | "test"
+      | "production";
+    const orderLive = orderRow.is_live_mode === true;
+    const envOk =
+      cfg.paymentsEnabled &&
+      !!mpCfg &&
+      cfg.mpEnv === orderEnv &&
+      cfg.isLiveMode === orderLive;
+    const hasActiveAttempt = !!active;
+    const activeAttemptStatus =
+      (active?.status as
+        | "processing"
+        | "pending"
+        | "awaiting_reconciliation"
+        | null) ?? null;
+    const canRetryPayment =
+      envOk &&
+      !hasActiveAttempt &&
+      orderRow.design_status === "ready" &&
+      !!orderRow.legal_accepted_at &&
+      (orderRow.payment_status === "rejected" ||
+        orderRow.payment_status === "cancelled");
+
+    return {
+      ...orderRow,
+      case_design_url: caseUrl,
+      garment_design_url: garmentUrl,
+      secondary_garment_design_url: secondaryGarmentUrl,
+      hasActiveAttempt,
+      activeAttemptStatus,
+      canRetryPayment,
+    };
+  });
+
+
+
+// ------------------------------------------------------------------
+// getPaymentBrickInit — via session
+// ------------------------------------------------------------------
+
+export const getPaymentBrickInit = createServerFn({ method: "POST" })
+  .inputValidator((i) => OrderIdInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const orderId = await requireOrderSession(data.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const cfg = getServerConfig();
+    const mp = tryGetMercadoPagoConfig();
+    const publicKey = mp?.publicKey ?? "";
+
+
+    const { data: order } = await supabaseAdmin
+      .from("custom_orders")
+      .select(
+        "id,total_amount,payment_status,customer_email,design_status,payment_environment,is_live_mode,legal_accepted_at",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+    if (!order) throw new Error("Pedido no encontrado");
+
+    const designReady = (order as any).design_status === "ready";
+    const orderEnv = ((order as any).payment_environment ?? "test") as
+      | "test"
+      | "production";
+    const orderLive = (order as any).is_live_mode === true;
+    const legalAccepted = !!(order as any).legal_accepted_at;
+
+    // §2 Payments gate — never mount Brick / call MP when disabled or when
+    // the configured server env does not match the order's env.
+    let paymentsDisabledReason: string | null = null;
+    if (!cfg.paymentsEnabled) {
+      paymentsDisabledReason = "PAYMENTS_DISABLED";
+    } else if (!cfg.mpEnv) {
+      paymentsDisabledReason = "PAYMENT_ENVIRONMENT_NOT_CONFIGURED";
+    } else if (!mp) {
+      paymentsDisabledReason = "PAYMENT_CREDENTIALS_INCOMPLETE";
+    } else if (cfg.mpEnv !== orderEnv || cfg.isLiveMode !== orderLive) {
+      paymentsDisabledReason = "ENVIRONMENT_MISMATCH";
+    } else if (cfg.mpEnv === "production") {
+      try {
+        assertProductionPaymentsConfigured();
+      } catch {
+        paymentsDisabledReason = "PRODUCTION_PAYMENT_CONFIGURATION_INCOMPLETE";
+      }
+    }
+
+    const payable =
+      !paymentsDisabledReason &&
+      designReady &&
+      legalAccepted &&
+      (order.payment_status === "pending" ||
+        order.payment_status === "rejected" ||
+        order.payment_status === "cancelled");
+    return {
+      publicKey,
+      amount: order.total_amount,
+      payerEmail: order.customer_email,
+      payable,
+      legalAccepted,
+      paymentsEnabled: !paymentsDisabledReason,
+      paymentsDisabledReason,
+      environment: orderEnv,
+      isLiveMode: orderLive,
+      designStatus: (order as any).design_status as
+        | "pending"
+        | "uploading"
+        | "ready"
+        | "failed",
+    };
+  });
+
+// ------------------------------------------------------------------
+// processMercadoPagoPayment — per-attempt idempotency
+// ------------------------------------------------------------------
+
+const PaymentInput = z.object({
+  orderId: z.string().uuid(),
+  formData: z.object({
+    token: z.string().optional(),
+    issuer_id: z.union([z.string(), z.number()]).optional(),
+    payment_method_id: z.string(),
+    installments: z.number().int().optional().default(1),
+    payer: z
+      .object({
+        email: z.string().email().optional(),
+        identification: z
+          .object({
+            type: z.string().optional(),
+            number: z.string().optional(),
+          })
+          .optional(),
+      })
+      .optional()
+      .default({}),
+  }),
+});
+
+export const processMercadoPagoPayment = createServerFn({ method: "POST" })
+  .inputValidator((i) => PaymentInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+    await enforceRateLimit(
+      "process_payment",
+      hashBucketKey("process_payment_order", orderId),
+      RATE_LIMITS.process_payment.limit,
+      RATE_LIMITS.process_payment.window,
+    );
+    const cfg = getServerConfig();
+    const mp = tryGetMercadoPagoConfig();
+    const accessToken = mp?.accessToken ?? "";
+    const siteOrigin = cfg.siteOrigin;
+
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    // 1. Load order for money + email (NOT for guard — RPC re-checks under lock).
+    const { data: order } = await supabaseAdmin
+      .from("custom_orders")
+      .select(
+        "id,order_number,total_amount,currency,payment_status,customer_email,customer_name,design_status,payment_environment,is_live_mode",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+    if (!order) throw new Error("Pedido no encontrado");
+    if ((order as any).design_status !== "ready") {
+      return {
+        ok: false as const,
+        code: "design_not_ready" as const,
+        status: order.payment_status as PaymentStatus,
+        message: "Los diseños del pedido aún no están listos",
+      };
+    }
+
+    // §2 Payments gate.
+    if (!cfg.paymentsEnabled) {
+      return {
+        ok: false as const,
+        code: "payments_disabled" as const,
+        status: order.payment_status as PaymentStatus,
+        message: "Los pagos están temporalmente deshabilitados",
+      };
+    }
+    if (!mp) {
+      return {
+        ok: false as const,
+        code: "payments_disabled" as const,
+        status: order.payment_status as PaymentStatus,
+        message:
+          cfg.mpEnv == null
+            ? "Entorno de pagos no configurado"
+            : "Credenciales de pago incompletas",
+      };
+    }
+    const orderEnv = ((order as any).payment_environment ?? "test") as
+      | "test"
+      | "production";
+    const orderLive = (order as any).is_live_mode === true;
+    if (cfg.mpEnv !== orderEnv || cfg.isLiveMode !== orderLive) {
+      return {
+        ok: false as const,
+        code: "environment_mismatch" as const,
+        status: order.payment_status as PaymentStatus,
+        message:
+          "Este pedido no puede procesarse en el entorno de pagos actual",
+      };
+    }
+    if (cfg.mpEnv === "production") {
+      try {
+        assertProductionPaymentsConfigured();
+      } catch (e) {
+        return {
+          ok: false as const,
+          code: "production_config_incomplete" as const,
+          status: order.payment_status as PaymentStatus,
+          message: "Configuración de producción incompleta",
+        };
+      }
+    }
+    const orderRow = order;
+
+
+    // 2. Fingerprint (no PAN, no CVV — MP one-time card token is fine to hash).
+    const fpSource = JSON.stringify({
+      o: order.id,
+      t: data.formData.token ?? "",
+      m: data.formData.payment_method_id,
+      i: data.formData.installments ?? 1,
+      a: order.total_amount,
+    });
+    const requestFingerprint = createHash("sha256").update(fpSource).digest("hex");
+
+    // 3. Reserve the attempt atomically via the RPC (SELECT ... FOR UPDATE inside).
+    const proposedIdemKey = randomUUID();
+    const { data: rpcRaw, error: rpcErr } = await supabaseAdmin.rpc(
+      "begin_payment_attempt" as any,
+      {
+        p_order_id: order.id,
+        p_idempotency_key: proposedIdemKey,
+        p_request_fingerprint: requestFingerprint,
+      } as any,
+    );
+    if (rpcErr) {
+      console.error("[begin_payment_attempt]", rpcErr.message);
+      throw new Error("No se pudo iniciar el pago");
+    }
+    const rpc = rpcRaw as {
+      ok: boolean;
+      code?: string;
+      reused?: boolean;
+      attempt_id?: string;
+      attempt_number?: number;
+      idempotency_key?: string;
+      previous_order_status?: PaymentStatus;
+      order_status?: PaymentStatus;
+    };
+
+    if (!rpc.ok) {
+      if (rpc.code === "awaiting_confirmation") {
+        return {
+          ok: false as const,
+          code: "awaiting_confirmation" as const,
+          status: "pending" as PaymentStatus,
+          message:
+            "Estamos esperando la confirmación de Mercado Pago para tu pago anterior.",
+        };
+      }
+      if (rpc.code === "order_locked") {
+        return {
+          ok: false as const,
+          code: "order_locked" as const,
+          status: (rpc.order_status ?? order.payment_status) as PaymentStatus,
+          message: "Este pedido ya no admite pagos",
+        };
+      }
+      if (rpc.code === "design_not_ready") {
+        return {
+          ok: false as const,
+          code: "design_not_ready" as const,
+          status: order.payment_status as PaymentStatus,
+          message: "Los diseños del pedido aún no están listos",
+        };
+      }
+      if (rpc.code === "order_not_found") {
+        throw new Error("Pedido no encontrado");
+      }
+      return {
+        ok: false as const,
+        status: order.payment_status as PaymentStatus,
+        message: "No se pudo iniciar el pago",
+      };
+    }
+
+    const attemptId = rpc.attempt_id!;
+    const idempotencyKey = rpc.idempotency_key!;
+    const previousOrderStatus = (rpc.previous_order_status ?? "pending") as PaymentStatus;
+
+    // §3 Stamp env fields on the attempt. Never trust MP inference — the
+    // server config decides what mode this attempt is issued under.
+    await supabaseAdmin
+      .from("payment_attempts")
+      .update({
+        payment_environment: cfg.mpEnv,
+        is_live_mode: cfg.isLiveMode,
+      } as any)
+      .eq("id", attemptId);
+
+    // Helper: restore order_status if the RPC flipped rejected/cancelled → pending
+    // and the attempt never produced a definitive result.
+    async function restorePreviousOrderStatus() {
+      if (previousOrderStatus === "pending") return;
+      // Only restore when order is still pending AND no other active attempt exists.
+      const { data: cur } = await supabaseAdmin
+        .from("custom_orders")
+        .select("payment_status")
+        .eq("id", orderRow.id)
+        .maybeSingle();
+      if (!cur || cur.payment_status !== "pending") return;
+      const { data: active } = await supabaseAdmin
+        .from("payment_attempts")
+        .select("id")
+        .eq("order_id", orderRow.id)
+        .in("status", ["processing", "pending"])
+        .maybeSingle();
+      if (active) return;
+      if (canTransition("pending", previousOrderStatus)) {
+        await supabaseAdmin
+          .from("custom_orders")
+          .update({ payment_status: previousOrderStatus })
+          .eq("id", orderRow.id);
+      }
+    }
+
+    // 4. Call MP.
+    const serverAmount = Number(order.total_amount);
+    const body = {
+      transaction_amount: serverAmount,
+      token: data.formData.token,
+      description: `VISUALSKIN ${order.order_number}`,
+      installments: data.formData.installments ?? 1,
+      payment_method_id: data.formData.payment_method_id,
+      issuer_id: data.formData.issuer_id
+        ? String(data.formData.issuer_id)
+        : undefined,
+      payer: {
+        email: data.formData.payer?.email ?? order.customer_email,
+        identification: data.formData.payer?.identification,
+      },
+      external_reference: order.id,
+      statement_descriptor: "VISUALSKIN",
+      metadata: {
+        order_id: order.id,
+        order_number: order.order_number,
+        payment_attempt_id: attemptId,
+      },
+      notification_url: `${cfg.supabaseUrl.replace(/\/+$/, "")}/functions/v1/mercadopago-webhook?source_news=webhooks`,
+    };
+
+    let res: Response;
+    try {
+      res = await fetch("https://api.mercadopago.com/v1/payments", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "X-Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      // Result unknown: the request may have reached Mercado Pago and created
+      // a payment before the connection dropped. NEVER allow a new attempt
+      // by simply timing out — the attempt stays in awaiting_reconciliation
+      // and blocks subsequent begin_payment_attempt calls (via the partial
+      // unique index) until the webhook resolves it or an operator does.
+      const { error: aErr } = await supabaseAdmin
+        .from("payment_attempts")
+        .update({
+          status: "awaiting_reconciliation",
+          status_detail: "network_error_after_send",
+        })
+        .eq("id", attemptId);
+      if (aErr) console.error("[attempt awaiting_reconciliation]", aErr.message);
+      // Do NOT restore previous order status — the outcome is unknown.
+      return {
+        ok: false as const,
+        code: "awaiting_reconciliation" as const,
+        status: "pending" as PaymentStatus,
+        message:
+          "Perdimos la conexión con Mercado Pago. Estamos verificando si el pago se registró; no vuelvas a pagar todavía.",
+      };
+    }
+
+    // 5. Parse response body defensively — do NOT touch tables directly.
+    let payment: {
+      id?: number | string;
+      status?: string;
+      status_detail?: string;
+      message?: string;
+      live_mode?: boolean;
+      transaction_amount?: number;
+      currency_id?: string;
+      external_reference?: string;
+      metadata?: { order_id?: string; payment_attempt_id?: string } | null;
+      payment_type_id?: string;
+      collector_id?: number | string;
+    } = {};
+    try {
+      payment = await res.json();
+    } catch {
+      // Body not JSON → treat as no-reliable-payment-object below.
+    }
+
+    // HTTP error path.
+    if (!res.ok) {
+      // If we can associate a payment id, route through the RPC so the
+      // reconciliation/mismatch bookkeeping happens under lock.
+      const hasReliablePayment =
+        payment &&
+        (payment.id !== undefined && payment.id !== null) &&
+        typeof payment.status === "string";
+      if (!hasReliablePayment) {
+        // Never log the payload; only the HTTP status + safe code.
+        console.error("[MP payments http]", res.status);
+        // 4xx = MP definitively rejected the request (no charge was made).
+        // Mark the attempt as `error`, keep the order in `pending`, and let
+        // the customer retry without creating a new order.
+        const isClientError = res.status >= 400 && res.status < 500;
+        if (isClientError) {
+          const { error: aErr } = await supabaseAdmin
+            .from("payment_attempts")
+            .update({
+              status: "error",
+              status_detail: `http_${res.status}_no_payment_object`,
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", attemptId);
+          if (aErr) console.error("[attempt error]", aErr.message);
+          await restorePreviousOrderStatus();
+          return {
+            ok: false as const,
+            code: "payment_failed" as const,
+            status: order.payment_status as PaymentStatus,
+            message:
+              "Mercado Pago no procesó el pago. Revisa los datos de la tarjeta e inténtalo nuevamente.",
+          };
+        }
+        // 5xx / unknown: outcome unclear → hold for reconciliation.
+        const { error: aErr } = await supabaseAdmin
+          .from("payment_attempts")
+          .update({
+            status: "awaiting_reconciliation",
+            status_detail: `http_${res.status}_no_payment_object`,
+          })
+          .eq("id", attemptId);
+        if (aErr) console.error("[attempt awaiting_reconciliation]", aErr.message);
+        await supabaseAdmin
+          .from("custom_orders")
+          .update({ manual_review_required: true })
+          .eq("id", orderRow.id);
+        return {
+          ok: false as const,
+          code: "awaiting_reconciliation" as const,
+          status: "pending" as PaymentStatus,
+          message:
+            "No pudimos confirmar el pago con Mercado Pago. Estamos verificándolo; no vuelvas a pagar todavía.",
+        };
+      }
+      // else: fall through to the canonical RPC path.
+    }
+
+    if (payment.id === undefined || payment.id === null) {
+      // No payment identifier at all → route to reconciliation.
+      const { error: aErr } = await supabaseAdmin
+        .from("payment_attempts")
+        .update({
+          status: "awaiting_reconciliation",
+          status_detail: "no_payment_id_in_response",
+        })
+        .eq("id", attemptId);
+      if (aErr) console.error("[attempt awaiting_reconciliation]", aErr.message);
+      await supabaseAdmin
+        .from("custom_orders")
+        .update({ manual_review_required: true })
+        .eq("id", orderRow.id);
+      return {
+        ok: false as const,
+        code: "awaiting_reconciliation" as const,
+        status: "pending" as PaymentStatus,
+        message:
+          "No pudimos confirmar el pago con Mercado Pago. Estamos verificándolo; no vuelvas a pagar todavía.",
+      };
+    }
+
+    // 6. Persist the MP payment id immediately (defense in depth): even if
+    // the transactional RPC below fails, the id stays associated to the
+    // attempt so the webhook or a reconciler can retry safely. We only fill
+    // the slot when it is empty to never overwrite a conflicting id.
+    try {
+      await supabaseAdmin
+        .from("payment_attempts")
+        .update({ mercado_pago_payment_id: String(payment.id) })
+        .eq("id", attemptId)
+        .is("mercado_pago_payment_id", null);
+      await supabaseAdmin
+        .from("custom_orders")
+        .update({ mp_payment_id: String(payment.id) })
+        .eq("id", orderRow.id)
+        .is("mp_payment_id", null);
+    } catch (e) {
+      // Never leak errors; the RPC will also persist below.
+      console.error("[persist payment_id pre-rpc]", (e as Error).message);
+    }
+
+    // 7. Delegate to the transactional RPC. NEVER UPDATE the attempt or the
+    // order directly here — the RPC validates canonical fields under lock.
+    const { data: applyRaw, error: applyErr } = await supabaseAdmin.rpc(
+      "apply_mercado_pago_payment_response" as any,
+      {
+        p_order_id: orderRow.id,
+        p_attempt_id: attemptId,
+        p_payment_id: String(payment.id),
+        p_payment_status: String(payment.status ?? ""),
+        p_status_detail: payment.status_detail ?? null,
+        p_live_mode: typeof payment.live_mode === "boolean" ? payment.live_mode : null,
+        p_transaction_amount:
+          typeof payment.transaction_amount === "number"
+            ? payment.transaction_amount
+            : null,
+        p_currency_id: payment.currency_id ?? null,
+        p_external_reference: payment.external_reference ?? null,
+        p_metadata_order_id: payment.metadata?.order_id ?? null,
+        p_metadata_attempt_id: payment.metadata?.payment_attempt_id ?? null,
+        p_payment_type_id: payment.payment_type_id ?? null,
+        p_collector_id:
+          payment.collector_id !== undefined && payment.collector_id !== null
+            ? String(payment.collector_id)
+            : null,
+        p_expected_collector_id: mp.collectorId ?? null,
+      } as any,
+    );
+
+
+    if (applyErr) {
+      // The RPC threw (order_not_found / attempt_not_found / attempt_order_mismatch)
+      // OR the DB update itself failed. Do NOT release the attempt and do NOT
+      // approve the order. Force the attempt into reconciliation so no new
+      // payment can begin until an operator/webhook resolves it.
+      console.error("[apply_mercado_pago_payment_response]", applyErr.message);
+      const { error: recErr } = await supabaseAdmin
+        .from("payment_attempts")
+        .update({
+          status: "awaiting_reconciliation",
+          status_detail: "rpc_apply_failed",
+        })
+        .eq("id", attemptId);
+      if (recErr) console.error("[attempt awaiting_reconciliation]", recErr.message);
+      await supabaseAdmin
+        .from("custom_orders")
+        .update({ manual_review_required: true })
+        .eq("id", orderRow.id);
+      return {
+        ok: false as const,
+        code: "awaiting_reconciliation" as const,
+        status: "pending" as PaymentStatus,
+        message:
+          "El pago quedó pendiente de confirmación. Un operador lo revisará; no vuelvas a pagar todavía.",
+      };
+    }
+
+    const apply = applyRaw as {
+      ok: boolean;
+      code?: string;
+      reason?: string;
+      order_status?: PaymentStatus;
+      attempt_status?: PaymentStatus;
+      terminal?: boolean;
+    };
+
+    if (!apply.ok) {
+      // The RPC already stamped awaiting_reconciliation + manual_review.
+      return {
+        ok: false as const,
+        code: "awaiting_reconciliation" as const,
+        status: "pending" as PaymentStatus,
+        message:
+          "El pago está en revisión por una inconsistencia detectada. Un operador lo confirmará.",
+      };
+    }
+
+    const finalStatus = (apply.order_status ?? "pending") as PaymentStatus;
+
+    // §3 Controlled auto-unlock after a canonical rejected/cancelled response.
+    // The design was locked by begin_payment_attempt; if the payment did not
+    // succeed, unlock it via the same RPC the FE would call, so the customer
+    // can retry without going back to the personalizador.
+    let unlockCode: string | null = null;
+    if (finalStatus === "rejected" || finalStatus === "cancelled") {
+      const { data: unlockRaw, error: unlockErr } = await supabaseAdmin.rpc(
+        "unlock_order_design" as any,
+        { p_order_id: orderRow.id } as any,
+      );
+      if (unlockErr) {
+        console.error("[auto unlock_order_design]", unlockErr.message);
+        unlockCode = "rpc_error";
+      } else {
+        const u = unlockRaw as { ok?: boolean; code?: string };
+        unlockCode = u?.code ?? (u?.ok ? "ok" : "unknown");
+      }
+    }
+
+    return {
+      ok: true as const,
+      status: finalStatus,
+      statusDetail: payment.status_detail ?? null,
+      paymentId: String(payment.id),
+      attemptId,
+      unlockCode,
+    };
+  });
+
+
+
+
+// ------------------------------------------------------------------
+// Admin: fulfillment only.
+// ------------------------------------------------------------------
+
+const AdminFulfillInput = z.object({
+  orderId: z.string().uuid(),
+  fulfillmentStatus: z.enum([
+    "new",
+    "in_production",
+    "ready",
+    "shipped",
+    "completed",
+    "cancelled",
+  ]),
+});
+
+export const adminSetFulfillmentStatus = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminFulfillInput.parse(i))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("has_role", {
+      _user_id: userId,
+      _role: "admin",
+    });
+    if (!isAdmin) throw new Error("Forbidden");
+
+    // Fuente de verdad: leer el pedido desde el servidor. Nunca confiar
+    // en payment_status enviado por el cliente.
+    const { data: order, error: readErr } = await supabase
+      .from("custom_orders")
+      .select("id, payment_status, fulfillment_status")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (readErr) throw new Error(readErr.message);
+    if (!order) throw new Error("Not found");
+    if (order.payment_status !== "approved") {
+      throw new Error(
+        "La producción solo puede modificarse cuando el pago está aprobado.",
+      );
+    }
+
+    const { error } = await supabase
+      .from("custom_orders")
+      .update({ fulfillment_status: data.fulfillmentStatus })
+      .eq("id", data.orderId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+// ------------------------------------------------------------------
+// §10 Admin server functions — role-checked, no dashboard-side money edits.
+// ------------------------------------------------------------------
+
+async function requireAdmin(context: {
+  supabase: any;
+  userId: string;
+}): Promise<void> {
+  const { data: isAdmin } = await context.supabase.rpc("has_role", {
+    _user_id: context.userId,
+    _role: "admin",
+  });
+  if (!isAdmin) throw new Error("Forbidden");
+}
+
+const AdminListInput = z.object({
+  qNumber: z.string().max(80).optional().default(""),
+  qName: z.string().max(120).optional().default(""),
+  qEmail: z.string().max(255).optional().default(""),
+  paymentStatus: z.string().max(30).optional().default(""),
+  fulfillmentStatus: z.string().max(30).optional().default(""),
+  designStatus: z.string().max(30).optional().default(""),
+  manualReview: z.enum(["", "yes", "no"]).optional().default(""),
+  from: z.string().max(40).optional().default(""),
+  to: z.string().max(40).optional().default(""),
+  page: z.number().int().min(1).max(1000).optional().default(1),
+  pageSize: z.number().int().min(1).max(100).optional().default(50),
+});
+
+export const adminListOrders = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminListInput.parse(i))
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    let q = supabaseAdmin
+      .from("custom_orders")
+      .select(
+        "id,order_number,customer_name,customer_email,customer_phone,total_amount,payment_status,fulfillment_status,design_status,manual_review_required,low_resolution_warning,created_at",
+        { count: "exact" },
+      )
+      .order("created_at", { ascending: false });
+    if (data.qNumber) q = q.ilike("order_number", `%${data.qNumber}%`);
+    if (data.qName) q = q.ilike("customer_name", `%${data.qName}%`);
+    if (data.qEmail) q = q.ilike("customer_email", `%${data.qEmail}%`);
+    if (data.paymentStatus) q = q.eq("payment_status", data.paymentStatus);
+    if (data.fulfillmentStatus) q = q.eq("fulfillment_status", data.fulfillmentStatus);
+    if (data.designStatus) q = q.eq("design_status", data.designStatus);
+    if (data.manualReview === "yes") q = q.eq("manual_review_required", true);
+    if (data.manualReview === "no") q = q.eq("manual_review_required", false);
+    if (data.from) q = q.gte("created_at", data.from);
+    if (data.to) q = q.lte("created_at", data.to);
+    const from = (data.page - 1) * data.pageSize;
+    q = q.range(from, from + data.pageSize - 1);
+    const { data: rows, error, count } = await q;
+    if (error) throw new Error(error.message);
+    return {
+      rows: (rows ?? []) as any[],
+      total: count ?? 0,
+      page: data.page,
+      pageSize: data.pageSize,
+    };
+  });
+
+const AdminOrderIdInput = z.object({ orderId: z.string().uuid() });
+
+export const adminGetOrderDetails = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminOrderIdInput.parse(i))
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const [
+      { data: order },
+      { data: fd },
+      { data: da },
+      { data: attempts },
+      { data: events },
+      { data: auths },
+    ] = await Promise.all([
+      supabaseAdmin.from("custom_orders").select("*").eq("id", data.orderId).maybeSingle(),
+      supabaseAdmin.from("final_designs").select("*").eq("order_id", data.orderId),
+      supabaseAdmin.from("design_assets").select("*").eq("order_id", data.orderId),
+      supabaseAdmin
+        .from("payment_attempts")
+        .select("*")
+        .eq("order_id", data.orderId)
+        .order("created_at", { ascending: false }),
+      supabaseAdmin
+        .from("payment_events")
+        .select("id,provider,event_type,event_action,status,processed_at,processing_result,created_at")
+        .eq("order_id", data.orderId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabaseAdmin
+        .from("order_upload_authorizations")
+        .select("*")
+        .eq("order_id", data.orderId)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (!order) throw new Error("Pedido no encontrado");
+    return {
+      order: order as any,
+      finalDesigns: (fd ?? []) as any[],
+      designAssets: (da ?? []) as any[],
+      attempts: (attempts ?? []) as any[],
+      events: (events ?? []) as any[],
+      authorizations: (auths ?? []) as any[],
+    };
+  });
+
+const AdminSignInput = z.object({
+  orderId: z.string().uuid(),
+  path: z.string().min(1).max(300),
+});
+
+async function adminSignOrderPath(
+  context: any,
+  orderId: string,
+  path: string,
+  ttlSeconds: number,
+): Promise<string> {
+  await requireAdmin(context);
+  applyNoStoreHeaders();
+  if (!path.startsWith(`${orderId}/`)) throw new Error("Ruta no pertenece al pedido");
+  if (path.includes("..") || path.includes("//")) throw new Error("Ruta inválida");
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: signed, error } = await (supabaseAdmin.storage as any)
+    .from(DESIGN_BUCKET)
+    .createSignedUrl(path, ttlSeconds);
+  if (error || !signed?.signedUrl) throw new Error("No se pudo firmar la URL");
+  return signed.signedUrl as string;
+}
+
+export const adminGetOrderDesignSignedUrl = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminSignInput.parse(i))
+  .handler(async ({ data, context }) => {
+    const url = await adminSignOrderPath(context, data.orderId, data.path, 60 * 5);
+    return { url };
+  });
+
+// A "production file" is a print-ready render separate from the customer
+// original and the low-res canvas preview. Until the pro-generation pipeline
+// exists, this endpoint always returns { url: null, status: "not_generated" }
+// — it never silently signs the preview and calls it a production file.
+export const adminDownloadProductionFile = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminSignInput.parse(i))
+  .handler(async ({ context }) => {
+    await requireAdmin(context);
+    applyNoStoreHeaders();
+    return { url: null as string | null, status: "not_generated" as const };
+  });
+
+// ------------------------------------------------------------------
+// §6 Admin diagnostics — returns ONLY booleans + the env label.
+// Never returns secret values, hashes, tokens, or URLs.
+// ------------------------------------------------------------------
+export const adminGetPaymentsDiagnostics = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+    return getPaymentsGateSummary();
+  });
+
+
+// ------------------------------------------------------------------
+// Admin recovery — regenerate the single-use public access token for an
+// order, invalidate any previously issued link and revoke all active
+// order sessions. The raw token is returned ONCE and never logged.
+// ------------------------------------------------------------------
+const AdminIssueRecoveryInput = z.object({
+  orderId: z.string().uuid(),
+});
+
+export const adminIssueOrderRecoveryLink = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminIssueRecoveryInput.parse(i))
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data: order, error: findErr } = await supabaseAdmin
+      .from("custom_orders")
+      .select("id")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (findErr) throw new Error("No se pudo consultar el pedido");
+    if (!order) throw new Error("Pedido no encontrado");
+
+    const rawToken = generateOpaqueToken(32);
+    const tokenHash = hashToken(rawToken);
+
+    // Rotate hash — invalidates any previously issued recovery link.
+    const { error: updErr } = await supabaseAdmin
+      .from("custom_orders")
+      .update({ public_access_token_hash: tokenHash })
+      .eq("id", order.id);
+    if (updErr) throw new Error("No se pudo emitir el enlace");
+
+    // Revoke any active order sessions to force re-exchange with the new token.
+    await supabaseAdmin
+      .from("payment_sessions")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("order_id", order.id)
+      .is("revoked_at", null);
+
+    const origin = getSiteOrigin();
+    const url = `${origin}/pedido/${order.id}?token=${rawToken}`;
+    return { ok: true as const, url };
+  });
+
+
+// ------------------------------------------------------------------
+// Legal acceptance — recorded before Payment Brick can mount.
+// ------------------------------------------------------------------
+// Canonical, deterministic JSON serializer for hashing. Sorts object keys
+// recursively. Excludes non-serializable values (functions/undefined).
+function canonicalJson(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v ?? null);
+  if (Array.isArray(v)) return "[" + v.map((x) => canonicalJson(x)).join(",") + "]";
+  const keys = Object.keys(v as Record<string, unknown>).sort();
+  return (
+    "{" +
+    keys
+      .map(
+        (k) =>
+          JSON.stringify(k) + ":" + canonicalJson((v as Record<string, unknown>)[k]),
+      )
+      .join(",") +
+    "}"
+  );
+}
+
+const LEGAL_DOC_TITLES = {
+  terms: "Términos y Condiciones",
+  privacy: "Política de Privacidad",
+  returns: "Cambios, devoluciones, garantía y retracto",
+} as const;
+
+type LegalContent = {
+  status?: string;
+  updated_at?: string | null;
+  sections?: Record<string, string>;
+};
+
+type LegalIdentityRow = {
+  status?: string;
+  trade_name?: string;
+  legal_name?: string;
+  rut?: string;
+  address?: string;
+  comuna?: string;
+  region?: string;
+  official_channel?: string;
+  legal_email?: string;
+};
+
+function isDocPublished(doc: LegalContent | null | undefined): boolean {
+  if (!doc) return false;
+  if (doc.status !== "published") return false;
+  const sections = doc.sections ?? {};
+  return Object.values(sections).some((s) => String(s ?? "").trim().length > 0);
+}
+
+function isIdentityPublished(id: LegalIdentityRow | null | undefined): boolean {
+  if (!id) return false;
+  if (id.status !== "published") return false;
+  return (
+    !!String(id.legal_name ?? "").trim() &&
+    !!String(id.rut ?? "").trim() &&
+    !!String(id.address ?? "").trim() &&
+    !!String(id.official_channel ?? "").trim()
+  );
+}
+
+async function loadLegalRecords(): Promise<
+  | { ok: true; identity: LegalIdentityRow; terms: LegalContent; privacy: LegalContent; returns: LegalContent }
+  | { ok: false; code: "documents_unavailable" }
+> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data } = await supabaseAdmin
+    .from("site_content")
+    .select("key,value")
+    .in("key", ["legal_identity", "legal_terms", "legal_privacy", "legal_returns"]);
+  const rows = (data ?? []) as { key: string; value: unknown }[];
+  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const identity = (map.get("legal_identity") ?? null) as LegalIdentityRow | null;
+  const terms = (map.get("legal_terms") ?? null) as LegalContent | null;
+  const privacy = (map.get("legal_privacy") ?? null) as LegalContent | null;
+  const returns = (map.get("legal_returns") ?? null) as LegalContent | null;
+  if (
+    !isIdentityPublished(identity) ||
+    !isDocPublished(terms) ||
+    !isDocPublished(privacy) ||
+    !isDocPublished(returns)
+  ) {
+    return { ok: false, code: "documents_unavailable" };
+  }
+  return {
+    ok: true,
+    identity: identity!,
+    terms: terms!,
+    privacy: privacy!,
+    returns: returns!,
+  };
+}
+
+const ORDER_ACCEPTABLE_PAYMENT_STATES = new Set([
+  "pending",
+  "rejected",
+  "cancelled",
+]);
+
+export const getLegalAcceptanceAvailability = createServerFn({ method: "POST" })
+  .handler(async () => {
+    applyNoStoreHeaders();
+    const r = await loadLegalRecords();
+    if (!r.ok) return { available: false as const };
+    return {
+      available: true as const,
+      documents: {
+        terms: { updatedAt: r.terms.updated_at ?? null },
+        privacy: { updatedAt: r.privacy.updated_at ?? null },
+        returns: { updatedAt: r.returns.updated_at ?? null },
+      },
+    };
+  });
+
+export const acceptOrderLegalDocuments = createServerFn({ method: "POST" })
+  .inputValidator((i) => OrderIdInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    const orderId = sess.orderId;
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order, error: readErr } = await supabaseAdmin
+      .from("custom_orders")
+      .select(
+        "id,order_number,payment_status,legal_accepted_at,legal_acceptance_hash",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+    if (readErr || !order) throw new Error("Pedido no encontrado");
+
+    // Idempotency — already accepted, return existing record verbatim.
+    if ((order as any).legal_accepted_at) {
+      return {
+        accepted: true as const,
+        acceptedAt: (order as any).legal_accepted_at as string,
+        hash: (order as any).legal_acceptance_hash as string,
+        idempotent: true as const,
+      };
+    }
+
+    if (!ORDER_ACCEPTABLE_PAYMENT_STATES.has((order as any).payment_status)) {
+      return { accepted: false as const, code: "order_not_acceptable" as const };
+    }
+
+    const docs = await loadLegalRecords();
+    if (!docs.ok) {
+      return { accepted: false as const, code: "documents_unavailable" as const };
+    }
+
+    // Server-owned timestamp — never trusted from the client.
+    const acceptedAt = new Date().toISOString();
+
+    // Snapshot content (identity + three documents) is what the hash covers.
+    // acceptedAt / orderId / orderNumber stay outside the signed payload so
+    // the same document versions yield the same hash across orders — useful
+    // for audit and duplicate detection.
+    const signedContent = {
+      schemaVersion: 1,
+      seller: {
+        tradeName: String(docs.identity.trade_name ?? ""),
+        legalName: String(docs.identity.legal_name ?? ""),
+        rut: String(docs.identity.rut ?? ""),
+        address: String(docs.identity.address ?? ""),
+        officialChannel: String(docs.identity.official_channel ?? ""),
+        legalEmail: String(docs.identity.legal_email ?? ""),
+      },
+      documents: {
+        terms: {
+          key: "legal_terms",
+          title: LEGAL_DOC_TITLES.terms,
+          updatedAt: docs.terms.updated_at ?? null,
+          content: docs.terms.sections ?? {},
+        },
+        privacy: {
+          key: "legal_privacy",
+          title: LEGAL_DOC_TITLES.privacy,
+          updatedAt: docs.privacy.updated_at ?? null,
+          content: docs.privacy.sections ?? {},
+        },
+        returns: {
+          key: "legal_returns",
+          title: LEGAL_DOC_TITLES.returns,
+          updatedAt: docs.returns.updated_at ?? null,
+          content: docs.returns.sections ?? {},
+        },
+      },
+    };
+    const hash = createHash("sha256")
+      .update(canonicalJson(signedContent), "utf8")
+      .digest("hex");
+
+    const snapshot = {
+      ...signedContent,
+      acceptedAt,
+      orderId: (order as any).id as string,
+      orderNumber: (order as any).order_number as string,
+    };
+
+    // Idempotent write: only set the columns if still NULL. If a concurrent
+    // request lost the race, re-read and return the winning record.
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from("custom_orders")
+      .update({
+        legal_accepted_at: acceptedAt,
+        legal_acceptance_snapshot: snapshot as any,
+        legal_acceptance_hash: hash,
+      } as any)
+      .eq("id", orderId)
+      .is("legal_accepted_at", null)
+      .select("legal_accepted_at,legal_acceptance_hash")
+      .maybeSingle();
+    if (updErr) {
+      console.error("[acceptOrderLegalDocuments] update", updErr.message);
+      throw new Error("No se pudo registrar la aceptación");
+    }
+    if (!updated) {
+      // Row already accepted between the read above and the update — reload.
+      const { data: existing } = await supabaseAdmin
+        .from("custom_orders")
+        .select("legal_accepted_at,legal_acceptance_hash")
+        .eq("id", orderId)
+        .maybeSingle();
+      return {
+        accepted: true as const,
+        acceptedAt: (existing as any)?.legal_accepted_at as string,
+        hash: (existing as any)?.legal_acceptance_hash as string,
+        idempotent: true as const,
+      };
+    }
+    return {
+      accepted: true as const,
+      acceptedAt: (updated as any).legal_accepted_at as string,
+      hash: (updated as any).legal_acceptance_hash as string,
+      idempotent: false as const,
+    };
+  });
+

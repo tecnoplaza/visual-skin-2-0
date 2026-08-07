@@ -1,0 +1,87 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-neon-blue: var(--neon-blue);
+  --color-neon-green: var(--neon-green);
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.13 0.005 260);
+  --foreground: oklch(0.98 0 0);
+  --card: oklch(0.17 0.006 260);
+  --card-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.17 0.006 260);
+  --popover-foreground: oklch(0.98 0 0);
+  --primary: oklch(0.72 0.2 250);
+  --primary-foreground: oklch(0.1 0 0);
+  --secondary: oklch(0.22 0.008 260);
+  --secondary-foreground: oklch(0.98 0 0);
+  --muted: oklch(0.22 0.008 260);
+  --muted-foreground: oklch(0.7 0.01 260);
+  --accent: oklch(0.85 0.25 145);
+  --accent-foreground: oklch(0.1 0 0);
+  --destructive: oklch(0.62 0.24 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.72 0.2 250);
+  --neon-blue: oklch(0.72 0.2 250);
+  --neon-green: oklch(0.85 0.25 145);
+}
+
+.dark { color-scheme: dark; }
+
+html, body { background: var(--background); color: var(--foreground); }
+body { font-family: var(--font-sans); }
+h1,h2,h3,h4 { font-family: var(--font-display); letter-spacing: -0.02em; }
+
+@utility text-gradient-neon {
+  background: linear-gradient(90deg, var(--neon-blue), var(--neon-green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility glow-blue {
+  box-shadow: 0 0 40px -10px var(--neon-blue);
+}
+@utility glow-green {
+  box-shadow: 0 0 40px -10px var(--neon-green);
+}
+@utility grid-bg {
+  background-image:
+    linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px);
+  background-size: 40px 40px;
+}

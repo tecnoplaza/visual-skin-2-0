@@ -1,0 +1,7 @@
+project_id = "arbupyyhdrlawxlqbkbs"
+
+[functions.mercadopago-webhook]
+verify_jwt = false
+
+[functions.mercadopago-reconcile]
+verify_jwt = false
