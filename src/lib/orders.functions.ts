@@ -581,7 +581,7 @@ export const createSecureOrder = createServerFn({ method: "POST" })
         status: "pendiente_pago",
         payment_status: "pending",
         fulfillment_status: "new",
-        payment_provider: "mercadopago",
+        payment_provider: "shopify",
         design_status: "pending",
         catalog_snapshot: catalogSnapshot,
         payment_environment: getServerConfig().mpEnv,
@@ -1202,6 +1202,253 @@ export const getOrderCsrfToken = createServerFn({ method: "POST" })
     return { csrfToken };
   });
 
+
+// ------------------------------------------------------------------
+// Shopify Checkout — server-side cart creation
+// ------------------------------------------------------------------
+
+type ShopifyPackType =
+  | "carcasa"
+  | "carcasa+polera"
+  | "carcasa+poleron"
+  | "carcasa+polera+poleron";
+
+function getShopifyConfig() {
+  const domain = (process.env.SHOPIFY_STORE_DOMAIN ?? "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const token = (process.env.SHOPIFY_STOREFRONT_ACCESS_TOKEN ?? "").trim();
+  const apiVersion = (process.env.SHOPIFY_STOREFRONT_API_VERSION ?? "2026-07").trim();
+  const variants: Record<ShopifyPackType, string> = {
+    carcasa: (process.env.SHOPIFY_VARIANT_CARCASA ?? "").trim(),
+    "carcasa+polera": (process.env.SHOPIFY_VARIANT_CARCASA_POLERA ?? "").trim(),
+    "carcasa+poleron": (process.env.SHOPIFY_VARIANT_CARCASA_POLERON ?? "").trim(),
+    "carcasa+polera+poleron": (process.env.SHOPIFY_VARIANT_CARCASA_POLERA_POLERON ?? "").trim(),
+  };
+  return { domain, token, apiVersion, variants };
+}
+
+function assertValidShopifyConfig(cfg: ReturnType<typeof getShopifyConfig>) {
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(cfg.domain) || !cfg.token) {
+    throw new Error("SHOPIFY_NOT_CONFIGURED");
+  }
+}
+
+async function shopifyStorefrontRequest<T>(
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  const cfg = getShopifyConfig();
+  assertValidShopifyConfig(cfg);
+  const response = await fetch(
+    `https://${cfg.domain}/api/${encodeURIComponent(cfg.apiVersion)}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Shopify-Storefront-Private-Token": cfg.token,
+      },
+      body: JSON.stringify({ query, variables }),
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    console.error("[Shopify] Storefront API HTTP error", response.status, body.slice(0, 300));
+    throw new Error("SHOPIFY_API_ERROR");
+  }
+  const json = (await response.json()) as {
+    data?: T;
+    errors?: Array<{ message?: string }>;
+  };
+  if (json.errors?.length) {
+    console.error("[Shopify] GraphQL error", json.errors.map((e) => e.message ?? "unknown").join(" | "));
+    throw new Error("SHOPIFY_GRAPHQL_ERROR");
+  }
+  if (!json.data) throw new Error("SHOPIFY_EMPTY_RESPONSE");
+  return json.data;
+}
+
+const CreateShopifyCheckoutInput = z.object({
+  orderId: z.string().uuid(),
+});
+
+export const createShopifyCheckout = createServerFn({ method: "POST" })
+  .inputValidator((i) => CreateShopifyCheckoutInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+
+    const orderId = await requireOrderSession(data.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data: order, error } = await (supabaseAdmin as any)
+      .from("custom_orders")
+      .select(
+        "id,order_number,pack_type,customer_name,customer_email,customer_phone,shipping_address,subtotal_amount,shipping_amount,total_amount,currency,payment_status,design_status,legal_accepted_at,shopify_cart_id,shopify_checkout_url,shopify_order_id",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (error || !order) throw new Error("Pedido no encontrado");
+
+    if (order.payment_status === "approved") {
+      return { ok: false as const, code: "already_paid" as const };
+    }
+    if (order.payment_status === "refunded" || order.payment_status === "charged_back") {
+      return { ok: false as const, code: "order_locked" as const };
+    }
+    if (order.design_status !== "ready") {
+      throw new Error("El diseño todavía no está listo para pagar");
+    }
+    if (!order.legal_accepted_at) {
+      throw new Error("Debes aceptar las condiciones de compra antes de pagar");
+    }
+
+    // Reuse a previously validated cart for this immutable, ready-to-pay order.
+    if (order.shopify_checkout_url) {
+      return {
+        ok: true as const,
+        checkoutUrl: order.shopify_checkout_url as string,
+        reused: true as const,
+      };
+    }
+
+    const cfg = getShopifyConfig();
+    assertValidShopifyConfig(cfg);
+    const variant = cfg.variants[order.pack_type as ShopifyPackType];
+    if (!/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(variant ?? "")) {
+      throw new Error(`SHOPIFY_VARIANT_NOT_CONFIGURED:${order.pack_type}`);
+    }
+
+    // Resolve the canonical customer data again from the database. Never trust
+    // payment amounts or customer information sent by the browser.
+    const shippingAddress = (order.shipping_address ?? {}) as Record<string, unknown>;
+    const deliveryMethod =
+      typeof shippingAddress.delivery_method === "string"
+        ? shippingAddress.delivery_method
+        : "shipping";
+
+    const attributes = [
+      { key: "visualskin_order_id", value: order.id },
+      { key: "visualskin_order_number", value: order.order_number },
+      { key: "visualskin_pack_type", value: order.pack_type },
+      { key: "visualskin_delivery_method", value: deliveryMethod },
+    ];
+
+    const deliveryAddress =
+      deliveryMethod === "shipping" && typeof shippingAddress.address === "string"
+        ? {
+            selected: true,
+            oneTimeUse: true,
+            address: {
+              deliveryAddress: {
+                firstName: String(order.customer_name ?? "").split(/\s+/)[0] || undefined,
+                lastName:
+                  String(order.customer_name ?? "").split(/\s+/).slice(1).join(" ") || undefined,
+                phone: order.customer_phone ?? undefined,
+                address1: shippingAddress.address,
+                city:
+                  typeof shippingAddress.comuna === "string"
+                    ? shippingAddress.comuna
+                    : undefined,
+                countryCode: "CL",
+              },
+            },
+          }
+        : undefined;
+
+    const query = `
+      mutation CartCreate($input: CartInput!) {
+        cartCreate(input: $input) {
+          cart {
+            id
+            checkoutUrl
+            cost {
+              subtotalAmount { amount currencyCode }
+              totalAmount { amount currencyCode }
+            }
+          }
+          userErrors { field message code }
+          warnings { message code target }
+        }
+      }
+    `;
+
+    const input: Record<string, unknown> = {
+      lines: [{ merchandiseId: variant, quantity: 1 }],
+      buyerIdentity: {
+        email: order.customer_email,
+        phone: order.customer_phone ?? undefined,
+        countryCode: "CL",
+      },
+      attributes,
+      note: `VisualSkin ${order.order_number}`,
+    };
+    if (deliveryAddress) input.delivery = { addresses: [deliveryAddress] };
+
+    type CartCreateData = {
+      cartCreate: {
+        cart: {
+          id: string;
+          checkoutUrl: string;
+          cost?: {
+            subtotalAmount?: { amount: string; currencyCode: string };
+            totalAmount?: { amount: string; currencyCode: string };
+          };
+        } | null;
+        userErrors: Array<{ message: string; code?: string | null }>;
+        warnings: Array<{ message: string }>;
+      };
+    };
+
+    const result = await shopifyStorefrontRequest<CartCreateData>(query, { input });
+    const payload = result.cartCreate;
+    if (payload.userErrors.length || !payload.cart?.checkoutUrl) {
+      console.error("[Shopify] cartCreate user errors", payload.userErrors);
+      throw new Error("SHOPIFY_CHECKOUT_CREATE_FAILED");
+    }
+
+    const shopifySubtotal = Number(payload.cart.cost?.subtotalAmount?.amount ?? NaN);
+    const canonicalSubtotal = Number(order.subtotal_amount);
+    const shopifyCurrency = payload.cart.cost?.subtotalAmount?.currencyCode;
+    if (!Number.isFinite(shopifySubtotal) || !Number.isFinite(canonicalSubtotal)) {
+      throw new Error("SHOPIFY_INVALID_PRICE_RESPONSE");
+    }
+    if (shopifyCurrency !== order.currency) {
+      throw new Error("SHOPIFY_CURRENCY_MISMATCH");
+    }
+    if (Math.round(shopifySubtotal) !== Math.round(canonicalSubtotal)) {
+      // Do not let a misconfigured Shopify variant silently charge a different
+      // product price than the VisualSkin order.
+      console.error("[Shopify] subtotal mismatch", {
+        orderId: order.id,
+        canonicalSubtotal,
+        shopifySubtotal,
+      });
+      throw new Error("SHOPIFY_PRICE_MISMATCH");
+    }
+    const { error: updateError } = await (supabaseAdmin as any)
+      .from("custom_orders")
+      .update({
+        shopify_cart_id: payload.cart.id,
+        shopify_checkout_url: payload.cart.checkoutUrl,
+        payment_provider: "shopify",
+        ...(order.payment_status === "rejected" || order.payment_status === "cancelled"
+          ? { payment_status: "pending" }
+          : {}),
+      })
+      .eq("id", order.id);
+
+    if (updateError) {
+      console.error("[Shopify] failed to persist cart", updateError.message);
+      throw new Error("SHOPIFY_CHECKOUT_PERSIST_FAILED");
+    }
+
+    return {
+      ok: true as const,
+      checkoutUrl: payload.cart.checkoutUrl,
+      reused: false as const,
+    };
+  });
+
 // ------------------------------------------------------------------
 // getOrderBySession — read via cookie
 // ------------------------------------------------------------------
@@ -1383,24 +1630,43 @@ export const getPaymentBrickInit = createServerFn({ method: "POST" })
 
 const PaymentInput = z.object({
   orderId: z.string().uuid(),
-  formData: z.object({
-    token: z.string().optional(),
-    issuer_id: z.union([z.string(), z.number()]).optional(),
-    payment_method_id: z.string(),
-    installments: z.number().int().optional().default(1),
-    payer: z
-      .object({
-        email: z.string().email().optional(),
-        identification: z
-          .object({
-            type: z.string().optional(),
-            number: z.string().optional(),
-          })
-          .optional(),
-      })
-      .optional()
-      .default({}),
-  }),
+  // Validate the Brick payload in the handler so malformed input becomes a
+  // controlled payment response rather than a server-function parse error.
+  formData: z.unknown(),
+});
+
+// Card Payment Brick submits a one-time token plus the selected method and
+// installments. `payer` is optional because the order email is the canonical
+// fallback, but a supplied identification must be complete.
+const MercadoPagoCardPaymentForm = z.object({
+  token: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => value.trim() === value, "invalid_token"),
+  issuer_id: z.union([
+    z.string().trim().min(1).max(100),
+    z.number().int().positive(),
+  ]).optional(),
+  payment_method_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z0-9_-]+$/, "invalid_payment_method"),
+  installments: z.number().int().min(1).max(72).optional().default(1),
+  payer: z
+    .object({
+      email: z.string().trim().email().max(255).optional(),
+      identification: z
+        .object({
+          type: z.string().trim().min(1).max(20),
+          number: z.string().trim().min(1).max(40),
+        })
+        .optional(),
+    })
+    .optional()
+    .default({}),
 });
 
 export const processMercadoPagoPayment = createServerFn({ method: "POST" })
@@ -1410,6 +1676,17 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
     assertSameOrigin();
     const sess = await requireOrderSessionAndCsrf(data.orderId);
     const orderId = sess.orderId;
+    const parsedPaymentForm = MercadoPagoCardPaymentForm.safeParse(data.formData);
+    if (!parsedPaymentForm.success) {
+      return {
+        ok: false as const,
+        code: "invalid_payment_payload" as const,
+        status: "pending" as PaymentStatus,
+        message:
+          "No pudimos validar los datos de pago. Revisa la tarjeta e intÃ©ntalo nuevamente.",
+      };
+    }
+    const paymentForm = parsedPaymentForm.data;
     await enforceRateLimit(
       "process_payment",
       hashBucketKey("process_payment_order", orderId),
@@ -1493,9 +1770,9 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
     // 2. Fingerprint (no PAN, no CVV — MP one-time card token is fine to hash).
     const fpSource = JSON.stringify({
       o: order.id,
-      t: data.formData.token ?? "",
-      m: data.formData.payment_method_id,
-      i: data.formData.installments ?? 1,
+      t: paymentForm.token,
+      m: paymentForm.payment_method_id,
+      i: paymentForm.installments,
       a: order.total_amount,
     });
     const requestFingerprint = createHash("sha256").update(fpSource).digest("hex");
@@ -1605,16 +1882,16 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
     const serverAmount = Number(order.total_amount);
     const body = {
       transaction_amount: serverAmount,
-      token: data.formData.token,
+      token: paymentForm.token,
       description: `VISUALSKIN ${order.order_number}`,
-      installments: data.formData.installments ?? 1,
-      payment_method_id: data.formData.payment_method_id,
-      issuer_id: data.formData.issuer_id
-        ? String(data.formData.issuer_id)
+      installments: paymentForm.installments,
+      payment_method_id: paymentForm.payment_method_id,
+      issuer_id: paymentForm.issuer_id
+        ? String(paymentForm.issuer_id)
         : undefined,
       payer: {
-        email: data.formData.payer?.email ?? order.customer_email,
-        identification: data.formData.payer?.identification,
+        email: paymentForm.payer?.email ?? order.customer_email,
+        identification: paymentForm.payer?.identification,
       },
       external_reference: order.id,
       statement_descriptor: "VISUALSKIN",
@@ -2401,4 +2678,3 @@ export const acceptOrderLegalDocuments = createServerFn({ method: "POST" })
       idempotent: false as const,
     };
   });
-

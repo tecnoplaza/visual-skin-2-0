@@ -1,0 +1,22 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "ac94a39639992115cd8d147b5bb79cf6"
+application_url = "https://shopify.dev/apps/default-app-home"
+embedded = false
+name = "VisualSkin Checkout"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_orders"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ ]
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["orders/paid"]
+uri = "https://visualskin.cl/api/public/webhooks/shopify"

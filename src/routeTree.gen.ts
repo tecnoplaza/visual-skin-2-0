@@ -9,67 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TerminosRouteImport } from './routes/terminos'
-import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
-import { Route as PrivacidadRouteImport } from './routes/privacidad'
-import { Route as PersonalizadorRouteImport } from './routes/personalizador'
-import { Route as FaqRouteImport } from './routes/faq'
-import { Route as CrearMiPackRouteImport } from './routes/crear-mi-pack'
-import { Route as ContactoRouteImport } from './routes/contacto'
-import { Route as CatalogoRouteImport } from './routes/catalogo'
-import { Route as CambiosYDevolucionesRouteImport } from './routes/cambios-y-devoluciones'
-import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as CambiosYDevolucionesRouteImport } from './routes/cambios-y-devoluciones'
+import { Route as CatalogoRouteImport } from './routes/catalogo'
+import { Route as ContactoRouteImport } from './routes/contacto'
+import { Route as CrearMiPackRouteImport } from './routes/crear-mi-pack'
+import { Route as FaqRouteImport } from './routes/faq'
+import { Route as PersonalizadorRouteImport } from './routes/personalizador'
+import { Route as PrivacidadRouteImport } from './routes/privacidad'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
+import { Route as TerminosRouteImport } from './routes/terminos'
 import { Route as AdminOrdersRouteImport } from './routes/admin.orders'
+import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
 import { Route as AdminOrdersIdRouteImport } from './routes/admin.orders.$id'
-import { Route as ApiPublicWebhooksMercadopagoRouteImport } from './routes/api/public/webhooks/mercadopago'
-import { Route as ApiPublicHooksCspReportRouteImport } from './routes/api/public/hooks/csp-report'
 import { Route as ApiPublicHooksCleanupRouteImport } from './routes/api/public/hooks/cleanup'
+import { Route as ApiPublicHooksCspReportRouteImport } from './routes/api/public/hooks/csp-report'
+import { Route as ApiPublicWebhooksMercadopagoRouteImport } from './routes/api/public/webhooks/mercadopago'
+import { Route as ApiPublicWebhooksShopifyRouteImport } from './routes/api/public/webhooks/shopify'
 
-const TerminosRoute = TerminosRouteImport.update({
-  id: '/terminos',
-  path: '/terminos',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
-  id: '/sitemap.xml',
-  path: '/sitemap.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PrivacidadRoute = PrivacidadRouteImport.update({
-  id: '/privacidad',
-  path: '/privacidad',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PersonalizadorRoute = PersonalizadorRouteImport.update({
-  id: '/personalizador',
-  path: '/personalizador',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FaqRoute = FaqRouteImport.update({
-  id: '/faq',
-  path: '/faq',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CrearMiPackRoute = CrearMiPackRouteImport.update({
-  id: '/crear-mi-pack',
-  path: '/crear-mi-pack',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContactoRoute = ContactoRouteImport.update({
-  id: '/contacto',
-  path: '/contacto',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CatalogoRoute = CatalogoRouteImport.update({
-  id: '/catalogo',
-  path: '/catalogo',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CambiosYDevolucionesRoute = CambiosYDevolucionesRouteImport.update({
-  id: '/cambios-y-devoluciones',
-  path: '/cambios-y-devoluciones',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -77,14 +38,49 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const CambiosYDevolucionesRoute = CambiosYDevolucionesRouteImport.update({
+  id: '/cambios-y-devoluciones',
+  path: '/cambios-y-devoluciones',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PedidoIdRoute = PedidoIdRouteImport.update({
-  id: '/pedido/$id',
-  path: '/pedido/$id',
+const CatalogoRoute = CatalogoRouteImport.update({
+  id: '/catalogo',
+  path: '/catalogo',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactoRoute = ContactoRouteImport.update({
+  id: '/contacto',
+  path: '/contacto',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CrearMiPackRoute = CrearMiPackRouteImport.update({
+  id: '/crear-mi-pack',
+  path: '/crear-mi-pack',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FaqRoute = FaqRouteImport.update({
+  id: '/faq',
+  path: '/faq',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PersonalizadorRoute = PersonalizadorRouteImport.update({
+  id: '/personalizador',
+  path: '/personalizador',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacidadRoute = PrivacidadRouteImport.update({
+  id: '/privacidad',
+  path: '/privacidad',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TerminosRoute = TerminosRouteImport.update({
+  id: '/terminos',
+  path: '/terminos',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminOrdersRoute = AdminOrdersRouteImport.update({
@@ -92,10 +88,25 @@ const AdminOrdersRoute = AdminOrdersRouteImport.update({
   path: '/orders',
   getParentRoute: () => AdminRoute,
 } as any)
+const PedidoIdRoute = PedidoIdRouteImport.update({
+  id: '/pedido/$id',
+  path: '/pedido/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminOrdersIdRoute = AdminOrdersIdRouteImport.update({
   id: '/$id',
   path: '/$id',
   getParentRoute: () => AdminOrdersRoute,
+} as any)
+const ApiPublicHooksCleanupRoute = ApiPublicHooksCleanupRouteImport.update({
+  id: '/api/public/hooks/cleanup',
+  path: '/api/public/hooks/cleanup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicHooksCspReportRoute = ApiPublicHooksCspReportRouteImport.update({
+  id: '/api/public/hooks/csp-report',
+  path: '/api/public/hooks/csp-report',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicWebhooksMercadopagoRoute =
   ApiPublicWebhooksMercadopagoRouteImport.update({
@@ -103,16 +114,12 @@ const ApiPublicWebhooksMercadopagoRoute =
     path: '/api/public/webhooks/mercadopago',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiPublicHooksCspReportRoute = ApiPublicHooksCspReportRouteImport.update({
-  id: '/api/public/hooks/csp-report',
-  path: '/api/public/hooks/csp-report',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicHooksCleanupRoute = ApiPublicHooksCleanupRouteImport.update({
-  id: '/api/public/hooks/cleanup',
-  path: '/api/public/hooks/cleanup',
-  getParentRoute: () => rootRouteImport,
-} as any)
+const ApiPublicWebhooksShopifyRoute =
+  ApiPublicWebhooksShopifyRouteImport.update({
+    id: '/api/public/webhooks/shopify',
+    path: '/api/public/webhooks/shopify',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -132,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
+  '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -151,6 +159,7 @@ export interface FileRoutesByTo {
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
+  '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -171,6 +180,7 @@ export interface FileRoutesById {
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
+  '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -192,6 +202,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
     | '/api/public/webhooks/mercadopago'
+    | '/api/public/webhooks/shopify'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -211,6 +222,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
     | '/api/public/webhooks/mercadopago'
+    | '/api/public/webhooks/shopify'
   id:
     | '__root__'
     | '/'
@@ -230,6 +242,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
     | '/api/public/webhooks/mercadopago'
+    | '/api/public/webhooks/shopify'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -248,71 +261,16 @@ export interface RootRouteChildren {
   ApiPublicHooksCleanupRoute: typeof ApiPublicHooksCleanupRoute
   ApiPublicHooksCspReportRoute: typeof ApiPublicHooksCspReportRoute
   ApiPublicWebhooksMercadopagoRoute: typeof ApiPublicWebhooksMercadopagoRoute
+  ApiPublicWebhooksShopifyRoute: typeof ApiPublicWebhooksShopifyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/terminos': {
-      id: '/terminos'
-      path: '/terminos'
-      fullPath: '/terminos'
-      preLoaderRoute: typeof TerminosRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sitemap.xml': {
-      id: '/sitemap.xml'
-      path: '/sitemap.xml'
-      fullPath: '/sitemap.xml'
-      preLoaderRoute: typeof SitemapDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacidad': {
-      id: '/privacidad'
-      path: '/privacidad'
-      fullPath: '/privacidad'
-      preLoaderRoute: typeof PrivacidadRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/personalizador': {
-      id: '/personalizador'
-      path: '/personalizador'
-      fullPath: '/personalizador'
-      preLoaderRoute: typeof PersonalizadorRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/faq': {
-      id: '/faq'
-      path: '/faq'
-      fullPath: '/faq'
-      preLoaderRoute: typeof FaqRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/crear-mi-pack': {
-      id: '/crear-mi-pack'
-      path: '/crear-mi-pack'
-      fullPath: '/crear-mi-pack'
-      preLoaderRoute: typeof CrearMiPackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/contacto': {
-      id: '/contacto'
-      path: '/contacto'
-      fullPath: '/contacto'
-      preLoaderRoute: typeof ContactoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/catalogo': {
-      id: '/catalogo'
-      path: '/catalogo'
-      fullPath: '/catalogo'
-      preLoaderRoute: typeof CatalogoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cambios-y-devoluciones': {
-      id: '/cambios-y-devoluciones'
-      path: '/cambios-y-devoluciones'
-      fullPath: '/cambios-y-devoluciones'
-      preLoaderRoute: typeof CambiosYDevolucionesRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -322,18 +280,67 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/cambios-y-devoluciones': {
+      id: '/cambios-y-devoluciones'
+      path: '/cambios-y-devoluciones'
+      fullPath: '/cambios-y-devoluciones'
+      preLoaderRoute: typeof CambiosYDevolucionesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/pedido/$id': {
-      id: '/pedido/$id'
-      path: '/pedido/$id'
-      fullPath: '/pedido/$id'
-      preLoaderRoute: typeof PedidoIdRouteImport
+    '/catalogo': {
+      id: '/catalogo'
+      path: '/catalogo'
+      fullPath: '/catalogo'
+      preLoaderRoute: typeof CatalogoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacto': {
+      id: '/contacto'
+      path: '/contacto'
+      fullPath: '/contacto'
+      preLoaderRoute: typeof ContactoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/crear-mi-pack': {
+      id: '/crear-mi-pack'
+      path: '/crear-mi-pack'
+      fullPath: '/crear-mi-pack'
+      preLoaderRoute: typeof CrearMiPackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/faq': {
+      id: '/faq'
+      path: '/faq'
+      fullPath: '/faq'
+      preLoaderRoute: typeof FaqRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/personalizador': {
+      id: '/personalizador'
+      path: '/personalizador'
+      fullPath: '/personalizador'
+      preLoaderRoute: typeof PersonalizadorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacidad': {
+      id: '/privacidad'
+      path: '/privacidad'
+      fullPath: '/privacidad'
+      preLoaderRoute: typeof PrivacidadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terminos': {
+      id: '/terminos'
+      path: '/terminos'
+      fullPath: '/terminos'
+      preLoaderRoute: typeof TerminosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/orders': {
@@ -343,6 +350,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminOrdersRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/pedido/$id': {
+      id: '/pedido/$id'
+      path: '/pedido/$id'
+      fullPath: '/pedido/$id'
+      preLoaderRoute: typeof PedidoIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/orders/$id': {
       id: '/admin/orders/$id'
       path: '/$id'
@@ -350,11 +364,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminOrdersIdRouteImport
       parentRoute: typeof AdminOrdersRoute
     }
-    '/api/public/webhooks/mercadopago': {
-      id: '/api/public/webhooks/mercadopago'
-      path: '/api/public/webhooks/mercadopago'
-      fullPath: '/api/public/webhooks/mercadopago'
-      preLoaderRoute: typeof ApiPublicWebhooksMercadopagoRouteImport
+    '/api/public/hooks/cleanup': {
+      id: '/api/public/hooks/cleanup'
+      path: '/api/public/hooks/cleanup'
+      fullPath: '/api/public/hooks/cleanup'
+      preLoaderRoute: typeof ApiPublicHooksCleanupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/hooks/csp-report': {
@@ -364,11 +378,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksCspReportRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/hooks/cleanup': {
-      id: '/api/public/hooks/cleanup'
-      path: '/api/public/hooks/cleanup'
-      fullPath: '/api/public/hooks/cleanup'
-      preLoaderRoute: typeof ApiPublicHooksCleanupRouteImport
+    '/api/public/webhooks/mercadopago': {
+      id: '/api/public/webhooks/mercadopago'
+      path: '/api/public/webhooks/mercadopago'
+      fullPath: '/api/public/webhooks/mercadopago'
+      preLoaderRoute: typeof ApiPublicWebhooksMercadopagoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/webhooks/shopify': {
+      id: '/api/public/webhooks/shopify'
+      path: '/api/public/webhooks/shopify'
+      fullPath: '/api/public/webhooks/shopify'
+      preLoaderRoute: typeof ApiPublicWebhooksShopifyRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -412,6 +433,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicHooksCleanupRoute: ApiPublicHooksCleanupRoute,
   ApiPublicHooksCspReportRoute: ApiPublicHooksCspReportRoute,
   ApiPublicWebhooksMercadopagoRoute: ApiPublicWebhooksMercadopagoRoute,
+  ApiPublicWebhooksShopifyRoute: ApiPublicWebhooksShopifyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
