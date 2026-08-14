@@ -1213,6 +1213,16 @@ type ShopifyPackType =
   | "carcasa+poleron"
   | "carcasa+polera+poleron";
 
+function normalizeShopifyPhone(phone: unknown): string | undefined {
+  if (typeof phone !== "string" || !phone.trim()) return undefined;
+
+  const compact = phone.trim().replace(/[\s\-()./]+/g, "");
+  if (/^\+56[2-9]\d{8}$/.test(compact)) return compact;
+  if (/^56[2-9]\d{8}$/.test(compact)) return `+${compact}`;
+  if (/^9\d{8}$/.test(compact)) return `+56${compact}`;
+  return undefined;
+}
+
 function getShopifyConfig() {
   const domain = (process.env.SHOPIFY_STORE_DOMAIN ?? "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
   const token = (process.env.SHOPIFY_STOREFRONT_ACCESS_TOKEN ?? "").trim();
@@ -1332,6 +1342,7 @@ export const createShopifyCheckout = createServerFn({ method: "POST" })
       { key: "visualskin_pack_type", value: order.pack_type },
       { key: "visualskin_delivery_method", value: deliveryMethod },
     ];
+    const shopifyPhone = normalizeShopifyPhone(order.customer_phone);
 
     const deliveryAddress =
       deliveryMethod === "shipping" && typeof shippingAddress.address === "string"
@@ -1343,7 +1354,7 @@ export const createShopifyCheckout = createServerFn({ method: "POST" })
                 firstName: String(order.customer_name ?? "").split(/\s+/)[0] || undefined,
                 lastName:
                   String(order.customer_name ?? "").split(/\s+/).slice(1).join(" ") || undefined,
-                phone: order.customer_phone ?? undefined,
+                ...(shopifyPhone ? { phone: shopifyPhone } : {}),
                 address1: shippingAddress.address,
                 city:
                   typeof shippingAddress.comuna === "string"
@@ -1376,7 +1387,7 @@ export const createShopifyCheckout = createServerFn({ method: "POST" })
       lines: [{ merchandiseId: variant, quantity: 1 }],
       buyerIdentity: {
         email: order.customer_email,
-        phone: order.customer_phone ?? undefined,
+        ...(shopifyPhone ? { phone: shopifyPhone } : {}),
         countryCode: "CL",
       },
       attributes,
