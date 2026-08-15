@@ -272,7 +272,6 @@ export default function MercadoPagoCardCheckout({
 
         const mercadoPago = new window.MercadoPago(config.publicKey, {
           locale: "es-CL",
-          frontEndStack: "react",
         });
         stage = "create-brick";
         const controller = await mercadoPago.bricks().create(
