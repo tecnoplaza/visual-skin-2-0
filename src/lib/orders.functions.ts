@@ -1720,6 +1720,76 @@ function buildMercadoPagoNotificationUrl(baseUrl: string | null): string | null 
   }
 }
 
+// TEMP TEST-only, read-only diagnostic for VS-2026-001052.
+// No browser input, Supabase access, payment mutation, or sensitive fields.
+export const diagnoseExistingMercadoPagoTestPayment = createServerFn({ method: "GET" })
+  .handler(async () => {
+    applyNoStoreHeaders();
+    const mp = getMercadoPagoConfig();
+    if (mp.env !== "test") {
+      throw new Error("Diagnóstico no disponible fuera de TEST");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(
+        "https://api.mercadopago.com/v1/payments/1327884572",
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${mp.accessToken}` },
+        },
+      );
+    } catch {
+      return {
+        exists: false,
+        httpStatus: 0,
+        status: null,
+        statusDetail: null,
+        liveMode: null,
+        currency: null,
+        amount: null,
+        externalReferenceMatches: false,
+        paymentMethod: null,
+      };
+    }
+
+    let payment: Record<string, unknown> = {};
+    if (response.ok) {
+      try {
+        const parsed: unknown = await response.json();
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          payment = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Invalid JSON is reported only through the closed diagnostic shape.
+      }
+    }
+
+    const safeCode = (value: unknown): string | null =>
+      typeof value === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(value)
+        ? value
+        : null;
+    const amount =
+      typeof payment.transaction_amount === "number" &&
+      Number.isFinite(payment.transaction_amount)
+        ? payment.transaction_amount
+        : null;
+
+    return {
+      exists: response.ok,
+      httpStatus: response.status,
+      status: safeCode(payment.status),
+      statusDetail: safeCode(payment.status_detail),
+      liveMode:
+        typeof payment.live_mode === "boolean" ? payment.live_mode : null,
+      currency: safeCode(payment.currency_id),
+      amount,
+      externalReferenceMatches:
+        payment.external_reference === "1f4c6347-5a98-425d-89d4-19fdf7b114e9",
+      paymentMethod: safeCode(payment.payment_method_id),
+    };
+  });
+
 export const processMercadoPagoPayment = createServerFn({ method: "POST" })
   .inputValidator((i) => PaymentInput.parse(i))
   .handler(async ({ data }) => {
@@ -1978,6 +2048,15 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
       },
       notification_url: notificationUrl,
     };
+
+    console.info("[MP credential diagnostic]", {
+      env: mp.env,
+      accessTokenPresent: accessToken.length > 0,
+      publicKeyPresent: mp.publicKey.length > 0,
+      webhookSecretPresent: mp.webhookSecret.length > 0,
+      accessTokenLooksTest: "unknown" as const,
+      publicKeyLooksTest: "unknown" as const,
+    });
 
     let res: Response;
     try {

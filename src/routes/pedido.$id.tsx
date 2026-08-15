@@ -6,6 +6,7 @@ import {
   getOrderBySession,
   getOrderCsrfToken,
   getPaymentBrickInit,
+  diagnoseExistingMercadoPagoTestPayment,
   processMercadoPagoPayment,
   createShopifyCheckout,
   unlockOrderDesign,
@@ -56,6 +57,7 @@ type Order = {
   shipping_amount: number;
   total_amount: number;
   currency: string;
+  payment_environment: "test" | "production";
   payment_status:
     | "pending"
     | "approved"
@@ -126,6 +128,18 @@ type BrickInit = {
   environment: "test" | "live";
 };
 
+type ExistingPaymentDiagnostic = {
+  exists: boolean;
+  httpStatus: number;
+  status: string | null;
+  statusDetail: string | null;
+  liveMode: boolean | null;
+  currency: string | null;
+  amount: number | null;
+  externalReferenceMatches: boolean;
+  paymentMethod: string | null;
+};
+
 function PedidoView() {
   const { id } = Route.useParams();
   const { token } = Route.useSearch();
@@ -155,6 +169,14 @@ function PedidoView() {
   const [legalSubmitting, setLegalSubmitting] = useState(false);
   const [legalError, setLegalError] = useState<string | null>(null);
   const [legalAvailable, setLegalAvailable] = useState<boolean | null>(null);
+  const [paymentDiagnostic, setPaymentDiagnostic] =
+    useState<ExistingPaymentDiagnostic | null>(null);
+  const [paymentDiagnosticError, setPaymentDiagnosticError] =
+    useState<string | null>(null);
+  const [paymentDiagnosticRunning, setPaymentDiagnosticRunning] =
+    useState(false);
+  const [paymentDiagnosticInvoked, setPaymentDiagnosticInvoked] =
+    useState(false);
   const legalSubmitLockRef = useRef(false);
   const submitLockRef = useRef(false);
   // Â§9 One in-flight unlock per order. `unlockedForRef` records the payment
@@ -594,6 +616,21 @@ function PedidoView() {
     }
   }, [brickDiagnostic, cspViolations]);
 
+  const runExistingPaymentDiagnostic = useCallback(async () => {
+    if (paymentDiagnosticInvoked || paymentDiagnosticRunning) return;
+    setPaymentDiagnosticInvoked(true);
+    setPaymentDiagnosticRunning(true);
+    setPaymentDiagnosticError(null);
+    try {
+      const result = await diagnoseExistingMercadoPagoTestPayment();
+      setPaymentDiagnostic(result as ExistingPaymentDiagnostic);
+    } catch {
+      setPaymentDiagnosticError("No se pudo ejecutar el diagnóstico read-only.");
+    } finally {
+      setPaymentDiagnosticRunning(false);
+    }
+  }, [paymentDiagnosticInvoked, paymentDiagnosticRunning]);
+
 
 
 
@@ -677,6 +714,9 @@ function PedidoView() {
     !order.hasActiveAttempt &&
     designReady &&
     (isPending || isRejected || isCancelled);
+  const showExistingPaymentDiagnostic =
+    order.id === "1f4c6347-5a98-425d-89d4-19fdf7b114e9" &&
+    order.payment_environment === "test";
 
 
 
@@ -690,6 +730,30 @@ function PedidoView() {
         <p className="mt-2 text-sm text-muted-foreground">
           Revisa tu diseño y paga con Mercado Pago dentro de VISUALSKIN.
         </p>
+        {showExistingPaymentDiagnostic && (
+          <div className="mx-auto mt-4 max-w-xl rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-left text-xs">
+            <button
+              type="button"
+              disabled={paymentDiagnosticInvoked || paymentDiagnosticRunning}
+              onClick={() => void runExistingPaymentDiagnostic()}
+              className="rounded-md border border-yellow-500/50 px-3 py-2 font-medium text-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {paymentDiagnosticRunning
+                ? "Consultando pago TEST…"
+                : paymentDiagnosticInvoked
+                  ? "Diagnóstico ejecutado"
+                  : "Consultar pago TEST existente"}
+            </button>
+            {paymentDiagnostic && (
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-yellow-100">
+                {JSON.stringify(paymentDiagnostic, null, 2)}
+              </pre>
+            )}
+            {paymentDiagnosticError && (
+              <p className="mt-3 text-destructive">{paymentDiagnosticError}</p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
