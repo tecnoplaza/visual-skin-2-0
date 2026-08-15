@@ -1680,6 +1680,22 @@ const MercadoPagoCardPaymentForm = z.object({
     .default({}),
 });
 
+function safeMpErrorCode(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.-]{1,100}$/.test(trimmed) ? trimmed : null;
+}
+
+function safeMpErrorText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 300) return null;
+  const mayContainSensitiveData =
+    /@|https?:\/\/|(?:\d[\s().\/-]*){3,}|\b(?:bearer|basic)\s+\S+|\b(?:access[_ -]?token|authorization|card[_ -]?token|cvv|security[_ -]?code|expir(?:y|ation)|email|document|identification)\s*[:=]\s*\S+|\b[A-Za-z0-9_-]{24,}\b/i;
+  return mayContainSensitiveData.test(trimmed) ? null : trimmed;
+}
+
 export const processMercadoPagoPayment = createServerFn({ method: "POST" })
   .inputValidator((i) => PaymentInput.parse(i))
   .handler(async ({ data }) => {
@@ -1970,7 +1986,10 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
       id?: number | string;
       status?: string;
       status_detail?: string;
-      message?: string;
+      error?: unknown;
+      message?: unknown;
+      cause?: unknown;
+      causes?: unknown;
       live_mode?: boolean;
       transaction_amount?: number;
       currency_id?: string;
@@ -1980,13 +1999,38 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
       collector_id?: number | string;
     } = {};
     try {
-      payment = await res.json();
+      const parsedBody: unknown = await res.json();
+      if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)) {
+        payment = parsedBody as typeof payment;
+      }
     } catch {
       // Body not JSON → treat as no-reliable-payment-object below.
     }
 
     // HTTP error path.
     if (!res.ok) {
+      const rawCauses = Array.isArray(payment.cause)
+        ? payment.cause
+        : Array.isArray(payment.causes)
+          ? payment.causes
+          : [];
+      const causeCodes = rawCauses.slice(0, 10).flatMap((cause) => {
+        if (!cause || typeof cause !== "object") return [];
+        const item = cause as Record<string, unknown>;
+        const code = safeMpErrorCode(item.code);
+        const description = safeMpErrorText(item.description ?? item.message);
+        return code !== null || description !== null
+          ? [{ code, description }]
+          : [];
+      });
+      console.error("[MP payment error safe]", {
+        httpStatus: res.status,
+        error: safeMpErrorCode(payment.error),
+        message: safeMpErrorText(payment.message),
+        status: safeMpErrorCode(payment.status),
+        status_detail: safeMpErrorCode(payment.status_detail),
+        causeCodes,
+      });
       // If we can associate a payment id, route through the RPC so the
       // reconciliation/mismatch bookkeeping happens under lock.
       const hasReliablePayment =
