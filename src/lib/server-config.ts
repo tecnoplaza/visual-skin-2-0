@@ -20,6 +20,8 @@ const RawSchema = z.object({
    * Solo protocolo + host — sin path, query, fragmento ni comodines.
    */
   ALLOWED_ORIGINS: z.string().optional(),
+  // Official Vercel system variable: current deployment hostname, without scheme.
+  VERCEL_URL: z.string().optional(),
 
   // MP environment is REQUIRED. No default.
   MERCADOPAGO_ENV: z.enum(["test", "production"]).optional(),
@@ -250,6 +252,7 @@ export function getServerConfig(): ServerConfig {
   const allowedOrigins = buildAllowedOrigins(
     siteOrigin,
     raw.ALLOWED_ORIGINS,
+    raw.VERCEL_URL,
     isProduction,
   );
 
@@ -296,9 +299,38 @@ function normalizeOriginStrict(raw: string): string | null {
   return `${u.protocol}//${u.host.toLowerCase()}`;
 }
 
+/**
+ * Convierte el hostname exacto del deployment actual informado por Vercel en
+ * un origen HTTPS. No acepta paths, puertos, credenciales ni otros dominios.
+ */
+function normalizeVercelDeploymentOrigin(raw: string | undefined): string | null {
+  if (!raw || raw !== raw.trim()) return null;
+  if (raw.length > 253) return null;
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+vercel\.app$/i.test(raw)) {
+    return null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(`https://${raw}`);
+  } catch {
+    return null;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (url.protocol !== "https:") return null;
+  if (!hostname.endsWith(".vercel.app") || hostname === "vercel.app") return null;
+  if (url.port || url.pathname !== "/" || url.search || url.hash) return null;
+  if (url.username || url.password) return null;
+  if (raw.toLowerCase() !== hostname) return null;
+
+  return `https://${hostname}`;
+}
+
 function buildAllowedOrigins(
   siteOrigin: string,
   rawList: string | undefined,
+  vercelDeploymentHost: string | undefined,
   isProduction: boolean,
 ): string[] {
   const set = new Set<string>();
@@ -310,6 +342,10 @@ function buildAllowedOrigins(
       if (norm) set.add(norm);
     }
   }
+  const vercelDeploymentOrigin = normalizeVercelDeploymentOrigin(
+    vercelDeploymentHost,
+  );
+  if (vercelDeploymentOrigin) set.add(vercelDeploymentOrigin);
   if (!isProduction) {
     set.add("http://localhost:8080");
     set.add("http://localhost:3000");
@@ -677,4 +713,3 @@ export async function getPaymentsGateSummary(): Promise<PaymentsGateSummary> {
     };
   }
 }
-
