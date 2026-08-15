@@ -1696,6 +1696,30 @@ function safeMpErrorText(value: unknown): string | null {
   return mayContainSensitiveData.test(trimmed) ? null : trimmed;
 }
 
+function buildMercadoPagoNotificationUrl(baseUrl: string | null): string | null {
+  if (!baseUrl || /[\s"'\\]/.test(baseUrl)) return null;
+  try {
+    const url = new URL(baseUrl);
+    if (
+      url.protocol !== "https:" ||
+      !url.hostname ||
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.username ||
+      url.password
+    ) {
+      return null;
+    }
+    url.pathname = "/functions/v1/mercadopago-webhook";
+    url.search = "";
+    url.searchParams.set("source_news", "webhooks");
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export const processMercadoPagoPayment = createServerFn({ method: "POST" })
   .inputValidator((i) => PaymentInput.parse(i))
   .handler(async ({ data }) => {
@@ -1807,6 +1831,15 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
           message: "Configuración de producción incompleta",
         };
       }
+    }
+    const notificationUrl = buildMercadoPagoNotificationUrl(cfg.supabaseAdminUrl);
+    if (!notificationUrl) {
+      return {
+        ok: false as const,
+        code: "payment_configuration_error" as const,
+        status: order.payment_status as PaymentStatus,
+        message: "No pudimos configurar las notificaciones del pago",
+      };
     }
     const orderRow = order;
 
@@ -1943,7 +1976,7 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
         order_number: order.order_number,
         payment_attempt_id: attemptId,
       },
-      notification_url: `${cfg.supabaseUrl.replace(/\/+$/, "")}/functions/v1/mercadopago-webhook?source_news=webhooks`,
+      notification_url: notificationUrl,
     };
 
     let res: Response;
