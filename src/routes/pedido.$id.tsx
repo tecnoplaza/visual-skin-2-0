@@ -19,14 +19,15 @@ import { productionDisplayLabel } from "@/lib/production-display";
 // browser globals at import time; keeping it out of the SSR bundle prevents
 // hydration races that leave the CardPayment brick stuck on skeletons after
 // a cold reload.
-const MercadoPagoCardClient = lazy(
-  () => import("@/components/payments/MercadoPagoCardClient"),
+const MercadoPagoCardCheckout = lazy(
+  () => import("@/components/payments/MercadoPagoCardCheckout"),
 );
 import type {
   SanitizedMpError,
   MercadoPagoDiagnostic,
   CspDiagnostic,
-} from "@/components/payments/MercadoPagoCardClient";
+  MercadoPagoCardSubmitData,
+} from "@/components/payments/MercadoPagoCardCheckout";
 
 const KNOWN_BRICK_ERRORS = new Set([
   "fields_setup_failed",
@@ -35,6 +36,10 @@ const KNOWN_BRICK_ERRORS = new Set([
   "missing_required_callbacks",
   "missing_container_id",
 ]);
+
+// Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
+// implemented below as a temporary fallback and can be re-enabled deliberately.
+const SHOW_SHOPIFY_FALLBACK = false;
 
 type Order = {
   id: string;
@@ -121,15 +126,6 @@ type BrickInit = {
   environment: "test" | "live";
 };
 
-type SubmitBrickSnapshot = {
-  publicKey: string;
-  orderId: string;
-  amount: number;
-  email: string | null;
-  retryGeneration: number;
-};
-
-
 function PedidoView() {
   const { id } = Route.useParams();
   const { token } = Route.useSearch();
@@ -147,23 +143,14 @@ function PedidoView() {
     useState<SanitizedMpError | null>(null);
   const [cspViolations, setCspViolations] = useState<CspDiagnostic[]>([]);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
-  const [retryGeneration, setRetryGeneration] = useState(0);
   const [payError, setPayError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [shopifyProcessing, setShopifyProcessing] = useState(false);
   const [shopifyError, setShopifyError] = useState<string | null>(null);
-  // Keep the existing CardPayment instance alive after a submitted attempt
-  // unless Mercado Pago has conclusively rejected/cancelled it. Polling can
-  // observe the server-side lock before the submit request returns; that must
-  // not make the customer lose the card fields in the mounted Brick.
-  const [preserveBrickAfterSubmit, setPreserveBrickAfterSubmit] = useState(false);
-  const [submitBrickSnapshot, setSubmitBrickSnapshot] =
-    useState<SubmitBrickSnapshot | null>(null);
   const [paymentsDisabled, setPaymentsDisabled] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [brickInit, setBrickInit] = useState<BrickInit | null>(null);
-  const brickInitRef = useRef<BrickInit | null>(null);
   const [legalChecked, setLegalChecked] = useState(false);
   const [legalSubmitting, setLegalSubmitting] = useState(false);
   const [legalError, setLegalError] = useState<string | null>(null);
@@ -199,9 +186,6 @@ function PedidoView() {
   useEffect(() => {
     loadOrderRef.current = loadOrder;
   }, [loadOrder]);
-  useEffect(() => {
-    brickInitRef.current = brickInit;
-  }, [brickInit]);
 
   // ---- On mount: if URL has token, exchange it for a cookie session then
   //      remove the token from the URL, otherwise try to use existing cookie.
@@ -334,14 +318,14 @@ function PedidoView() {
         setLegalError(
           r.code === "documents_unavailable"
             ? "Las condiciones de compra no estÃ¡n disponibles en este momento. IntÃ©ntalo nuevamente mÃ¡s tarde."
-            : "Este pedido ya no admite registrar la aceptaciÃ³n.",
+            : "Este pedido ya no admite registrar la aceptación.",
         );
         return;
       }
       await loadOrder();
     } catch (e) {
       setLegalError(
-        e instanceof Error ? e.message : "No se pudo registrar la aceptaciÃ³n",
+        e instanceof Error ? e.message : "No se pudo registrar la aceptación",
       );
     } finally {
       setLegalSubmitting(false);
@@ -393,123 +377,102 @@ function PedidoView() {
     }
   }, [order, shopifyProcessing]);
 
-  // Shopify owns the payment UI. The legacy Mercado Pago Brick remains in
-  // the repository for rollback, but is deliberately not initialized here.
+  // Initialize Mercado Pago only when this order can start a payment. Once
+  // obtained, keep this configuration latched: polling must never clear it or
+  // recreate the mounted Brick while a submit is in flight.
   useEffect(() => {
-    setBrickInit(null);
-    setBrickStatus("idle");
+    if (!hydrated || !sessionReady || !order || brickInit) return;
+    const canInitialize =
+      !order.hasActiveAttempt &&
+      order.design_status === "ready" &&
+      !!order.legal_accepted_at &&
+      (order.payment_status === "pending" ||
+        order.payment_status === "rejected" ||
+        order.payment_status === "cancelled" ||
+        order.canRetryPayment === true);
+    if (!canInitialize) return;
+
+    let cancelled = false;
+    setBrickStatus("loading");
+    setBrickSlow(false);
     setBrickError(null);
-  }, []);
+    setPayError(null);
+    void (async () => {
+      try {
+        const init = await getPaymentBrickInit({ data: { orderId: order.id } });
+        if (cancelled) return;
+        if (!init.paymentsEnabled) {
+          setPaymentsDisabled(true);
+          setBrickStatus("idle");
+          return;
+        }
+        setPaymentsDisabled(false);
+        if (!init.payable) {
+          setBrickStatus("idle");
+          return;
+        }
+        if (!init.publicKey || typeof init.publicKey !== "string") {
+          throw new Error("Public Key de Mercado Pago no disponible");
+        }
+        const amount = Number(init.amount);
+        if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
+          throw new Error("Monto de pago inválido");
+        }
+        setBrickInit({
+          publicKey: init.publicKey,
+          amount,
+          payerEmail: init.payerEmail ?? null,
+          environment:
+            (init as { environment?: string }).environment === "live"
+              ? "live"
+              : "test",
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.error("[MP Brick init]", error);
+        setBrickStatus("error");
+        setBrickError("No pudimos cargar el formulario de tarjeta.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    hydrated,
+    sessionReady,
+    order?.id,
+    order?.payment_status,
+    order?.design_status,
+    order?.hasActiveAttempt,
+    order?.canRetryPayment,
+    order?.legal_accepted_at,
+    brickInit,
+  ]);
 
-  // Do NOT recreate the Brick automatically after a rejected/cancelled
-  // payment. The existing Brick must remain mounted so the customer does
-  // not lose the card form state. A new Brick is created only when the user
-  // explicitly presses "Reintentar formulario" via handleRetryBrick().
-  // NOTE: retryGeneration is intentionally NOT auto-incremented on cold reload
-  // of a rejected/cancelled order. It only bumps when the user presses
-  // "Reintentar formulario" or after a rejected in-session payment attempt
-  // (see handleBrickSubmit). Auto-bumping on load caused a mount â†’ detect
-  // rejected â†’ unmount â†’ remount cycle that left the Brick on skeletons.
-
-
-
-  // Stable onSubmit â€” depends only on the primitive orderId, so its identity
-  // doesn't churn when unrelated state (processing, brickStatus, payError,
-  // polled order snapshot) updates. The client component also stabilizes it
-  // via a ref, so CardPayment never sees a new callback identity.
+  // Stable submit callback. MercadoPagoCardCheckout already strips the SDK
+  // payload; this second allow-list makes the server boundary explicit.
   const orderIdPrimitive = order?.id ?? null;
   const handleBrickSubmit = useCallback(
-    async (cardFormData: any) => {
-      const formData = cardFormData;
-      const additionalData: { cardholderName?: string; bin?: string } = {};
+    async (cardFormData: MercadoPagoCardSubmitData) => {
       if (!orderIdPrimitive) return;
       if (submitLockRef.current) return;
-      const payer =
-        formData?.payer && typeof formData.payer === "object"
-          ? (formData.payer as Record<string, unknown>)
-          : null;
-      const payerIdentification =
-        payer?.identification && typeof payer.identification === "object"
-          ? (payer.identification as Record<string, unknown>)
-          : null;
-      console.info("[MP FLOW 1] handleBrickSubmit:start", {
-        formDataKeys:
-          formData && typeof formData === "object" ? Object.keys(formData) : [],
-        hasToken: typeof formData?.token === "string" && formData.token.length > 0,
-        payment_method_id:
-          typeof formData?.payment_method_id === "string"
-            ? formData.payment_method_id
-            : null,
-        installments:
-          typeof formData?.installments === "number" ||
-          typeof formData?.installments === "string"
-            ? formData.installments
-            : null,
-        transaction_amount:
-          typeof formData?.transaction_amount === "number" ||
-          typeof formData?.transaction_amount === "string"
-            ? formData.transaction_amount
-            : null,
-        payer: {
-          exists: payer !== null,
-          keys: payer ? Object.keys(payer) : [],
-          hasEmail: typeof payer?.email === "string" && payer.email.length > 0,
-          identificationType:
-            typeof payerIdentification?.type === "string"
-              ? payerIdentification.type
-              : null,
-        },
-      });
-      if (brickInitRef.current && orderIdPrimitive) {
-        setSubmitBrickSnapshot({
-          publicKey: brickInitRef.current.publicKey,
-          orderId: orderIdPrimitive,
-          amount: Number(brickInitRef.current.amount),
-          email: brickInitRef.current.payerEmail,
-          retryGeneration,
-        });
-      }
+      const formData: MercadoPagoCardSubmitData = {
+        token: cardFormData.token,
+        payment_method_id: cardFormData.payment_method_id,
+        installments: cardFormData.installments,
+        ...(cardFormData.issuer_id !== undefined
+          ? { issuer_id: cardFormData.issuer_id }
+          : {}),
+        ...(cardFormData.payer?.email
+          ? { payer: { email: cardFormData.payer.email } }
+          : {}),
+      };
       submitLockRef.current = true;
       setProcessing(true);
-      setPreserveBrickAfterSubmit(true);
       setPayError(null);
       try {
-        // Safe diagnostic: no PAN, CVV, token, expiry, or ID.
-        const rawName =
-          typeof additionalData?.cardholderName === "string"
-            ? additionalData.cardholderName
-            : "";
-        const allowedTestCodes = new Set([
-          "APRO",
-          "OTHE",
-          "CONT",
-          "CALL",
-          "FUND",
-          "SECU",
-          "EXPI",
-          "FORM",
-        ]);
-        const isTestCode = allowedTestCodes.has(rawName.trim());
-      console.info("[MP Brick submit]", {
-          hasCardholderName: rawName.length > 0,
-          cardholderName: isTestCode ? rawName.trim() : null,
-          environment: "test",
-          payment_method_id:
-            typeof formData?.payment_method_id === "string"
-              ? formData.payment_method_id
-              : null,
-        });
-        console.info("[MP FLOW 2] before processMercadoPagoPayment", {
-          processing: true,
-          preserveBrickAfterSubmit: true,
-        });
         const r = await processMercadoPagoPayment({
           data: { orderId: orderIdPrimitive, formData },
-        });
-        console.info("[MP FLOW 3] processMercadoPagoPayment:success", {
-          ok: r.ok,
-          status: "status" in r ? r.status ?? null : null,
-          code: "code" in r ? r.code ?? null : null,
         });
 
         if (!r.ok) {
@@ -523,45 +486,31 @@ function PedidoView() {
           }
           if (code === "awaiting_confirmation") {
             setPayError(
-              "Estamos esperando la confirmaciÃ³n de Mercado Pago para tu pago anterior. Esta pantalla se actualiza automÃ¡ticamente.",
+              "Estamos esperando la confirmación de Mercado Pago para tu pago anterior. Esta pantalla se actualiza automáticamente.",
             );
           } else if (code === "awaiting_reconciliation") {
             setPayError(
-              "Perdimos la conexiÃ³n con Mercado Pago justo despuÃ©s de enviar el cobro. Estamos verificando si el pago quedÃ³ registrado; no vuelvas a pagar hasta que se confirme.",
+              "Perdimos la conexión con Mercado Pago justo después de enviar el cobro. Estamos verificando si el pago quedó registrado; no vuelvas a pagar hasta que se confirme.",
             );
           } else if (code === "design_not_ready") {
-            setPayError("Los diseÃ±os del pedido aÃºn no estÃ¡n listos.");
+            setPayError("Los diseños del pedido aún no están listos.");
           } else if (code === "order_locked") {
             setPayError("Este pedido ya no admite nuevos pagos.");
           } else {
             setPayError(r.message ?? "Pago rechazado");
           }
-        } else if (r.status === "approved") {
-          // The order is complete, so the Brick no longer needs preserving.
-          setPreserveBrickAfterSubmit(false);
         }
-        console.info("[MP FLOW 4] before loadOrderRef.current", {
-          processing: true,
-          preserveBrickAfterSubmit: r.ok && r.status === "approved" ? false : true,
-        });
         await loadOrderRef.current();
-        console.info("[MP FLOW 5] after loadOrderRef.current", {
-          processing: true,
-          preserveBrickAfterSubmit: r.ok && r.status === "approved" ? false : true,
-        });
       } catch (e) {
-        console.error("[MP FLOW ERROR] handleBrickSubmit", e);
         setPayError(
           e instanceof Error ? e.message : "Error al procesar el pago",
         );
       } finally {
-        console.info("[MP FLOW 4] handleBrickSubmit:finally");
         setProcessing(false);
-        setSubmitBrickSnapshot(null);
         submitLockRef.current = false;
       }
     },
-    [orderIdPrimitive, retryGeneration],
+    [orderIdPrimitive],
   );
 
   const handleBrickMounted = useCallback(() => {
@@ -625,18 +574,6 @@ function PedidoView() {
   }, []);
 
   const diagnosticEnabled = brickInit?.environment === "test";
-
-  const clearDiagnostics = useCallback(() => {
-    setBrickDiagnostic(null);
-    setCspViolations([]);
-    setCopyStatus("idle");
-  }, []);
-
-  const handleRetryBrick = useCallback(() => {
-    clearDiagnostics();
-    setBrickSlow(false);
-    setRetryGeneration((g) => g + 1);
-  }, [clearDiagnostics]);
 
   const copyDiagnostic = useCallback(async () => {
     const payload = {
@@ -721,23 +658,11 @@ function PedidoView() {
     (isFreshPending || order.canRetryPayment === true) &&
     !paymentsDisabled &&
     legalAccepted;
-  const isBrickActive = processing && submitBrickSnapshot !== null;
-  const activeBrickConfig = isBrickActive
-    ? submitBrickSnapshot
-    : (brickInit && order ? {
-        publicKey: brickInit.publicKey,
-        orderId: order.id,
-        amount: Number(brickInit.amount),
-        email: brickInit.payerEmail,
-        retryGeneration,
-      } : null);
-  const keepBrickMounted = processing || preserveBrickAfterSubmit;
-  const showBrick =
-    !!activeBrickConfig &&
-    (canRetry || keepBrickMounted) &&
-    (!paymentsDisabled || keepBrickMounted);
-  const showBrickContainer =
-    isBrickActive || (showBrick && !!order);
+  // Once initialized, the checkout stays in the tree until the order reaches
+  // a state where a card form is no longer needed. Polling state is not part
+  // of this condition, so processing/locking cannot tear down the Brick.
+  const showBrickCheckout =
+    !!brickInit && legalAccepted && !isApproved && !isFinalNoRetry;
   const brickInteractionDisabled =
     processing || order.hasActiveAttempt === true || paymentsDisabled;
   // Show "preparing new attempt" while the auto-unlock is still in-flight.
@@ -763,7 +688,7 @@ function PedidoView() {
         </div>
         <h1 className="mt-4 font-display text-3xl font-bold md:text-4xl">Resumen y pago</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Revisa tu diseÃ±o y paga con Mercado Pago dentro de VISUALSKIN.
+          Revisa tu diseño y paga con Mercado Pago dentro de VISUALSKIN.
         </p>
       </div>
 
@@ -907,7 +832,7 @@ function PedidoView() {
                 <Clock className="mx-auto mb-1 h-5 w-5" />
                 Procesando pagoâ€¦
                 <div className="mt-1 text-[10px] text-yellow-400/70">
-                  No cierres esta pÃ¡gina mientras confirmamos la operaciÃ³n.
+                  No cierres esta página mientras confirmamos la operación.
                 </div>
               </div>
             )}
@@ -915,9 +840,9 @@ function PedidoView() {
             {isAwaitingPending && (
               <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center text-xs text-yellow-400">
                 <Clock className="mx-auto mb-1 h-5 w-5" />
-                Esperando confirmaciÃ³n
+                Esperando confirmación
                 <div className="mt-1 text-[10px] text-yellow-400/70">
-                  Mercado Pago todavÃ­a estÃ¡ procesando tu pago. No necesitas volver a pagar.
+                  Mercado Pago todavía está procesando tu pago. No necesitas volver a pagar.
                 </div>
               </div>
             )}
@@ -927,7 +852,7 @@ function PedidoView() {
                 <Clock className="mx-auto mb-1 h-5 w-5" />
                 Estamos verificando tu pago
                 <div className="mt-1 text-[10px] text-yellow-400/70">
-                  No realices otro pago. Actualizaremos el estado cuando Mercado Pago confirme la operaciÃ³n.
+                  No realices otro pago. Actualizaremos el estado cuando Mercado Pago confirme la operación.
                 </div>
               </div>
             )}
@@ -952,21 +877,21 @@ function PedidoView() {
             )}
             {isFreshPending && (
               <div className="rounded-lg border border-neon-blue/40 bg-neon-blue/10 p-3 text-center text-xs text-neon-blue">
-                Completa tu pago con tarjeta de crÃ©dito o dÃ©bito.
+                Completa tu pago con tarjeta de crédito o débito.
               </div>
             )}
 
             {!designReady && !designLocked && !isApproved && !isFinalNoRetry && (
               <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center text-xs text-yellow-400">
                 {order.design_status === "failed"
-                  ? "No pudimos guardar tus diseÃ±os. Vuelve al personalizador e intÃ©ntalo de nuevo."
-                  : "Estamos guardando tus diseÃ±os. El pago se habilita cuando terminen."}
+                  ? "No pudimos guardar tus diseños. Vuelve al personalizador e inténtalo de nuevo."
+                  : "Estamos guardando tus diseños. El pago se habilita cuando terminen."}
               </div>
             )}
 
             {paymentsDisabled && !isApproved && (
               <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center text-xs text-yellow-400">
-                Los pagos estÃ¡n temporalmente deshabilitados. Tu pedido y tus diseÃ±os siguen accesibles.
+                Los pagos están temporalmente deshabilitados. Tu pedido y tus diseños siguen accesibles.
               </div>
             )}
 
@@ -988,16 +913,97 @@ function PedidoView() {
                   <span>Condiciones aceptadas. Ya puedes continuar con el pago.</span>
                 </div>
                 <div className="mt-1 pl-6 text-[10px] text-neon-green/80">
-                  AceptaciÃ³n registrada el{" "}
+                  Aceptación registrada el{" "}
                   {new Date(order.legal_accepted_at!).toLocaleString("es-CL")}
                 </div>
               </div>
             )}
 
+            {brickStatus === "loading" && !brickInit && canRetry && (
+              <div className="grid place-items-center py-6 text-xs text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <p className="mt-2">Cargando medio de pago…</p>
+              </div>
+            )}
 
+            {showBrickCheckout && brickInit && (
+              <div className="relative rounded-2xl border border-neon-blue/40 bg-neon-blue/10 p-5">
+                <div className="mb-4 text-center">
+                  <div className="text-sm font-semibold text-foreground">
+                    Pago seguro con Mercado Pago
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Paga con tarjeta de crédito, débito o prepago sin salir de VisualSkin.
+                  </p>
+                </div>
 
+                <Suspense
+                  fallback={
+                    <div className="grid place-items-center py-6 text-xs text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <p className="mt-2">Cargando medio de pago…</p>
+                    </div>
+                  }
+                >
+                  <div
+                    className={brickInteractionDisabled ? "pointer-events-none opacity-60" : undefined}
+                    aria-busy={brickInteractionDisabled}
+                  >
+                    <MercadoPagoCardCheckout
+                      publicKey={brickInit.publicKey}
+                      orderId={order.id}
+                      amount={brickInit.amount}
+                      email={brickInit.payerEmail}
+                      onReady={handleBrickReady}
+                      onMounted={handleBrickMounted}
+                      onSlowReady={handleBrickSlowReady}
+                      onError={handleBrickError}
+                      onSubmit={handleBrickSubmit}
+                      onDiagnostic={handleBrickDiagnostic}
+                    />
+                  </div>
+                </Suspense>
 
-            {legalAccepted && !isApproved && !isFinalNoRetry && (
+                {processing && (
+                  <div className="absolute inset-0 grid place-items-center rounded-2xl bg-background/75">
+                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Procesando pago...
+                    </div>
+                  </div>
+                )}
+                {brickSlow && brickStatus !== "ready" && (
+                  <p className="mt-3 text-center text-xs text-yellow-400">
+                    El formulario está tardando más de lo esperado.
+                  </p>
+                )}
+                {payError && (
+                  <p className="mt-3 text-center text-xs text-destructive">{payError}</p>
+                )}
+                <p className="mt-3 text-center text-[10px] text-muted-foreground">
+                  VisualSkin no almacena los datos de tu tarjeta.
+                </p>
+              </div>
+            )}
+
+            {brickStatus === "error" && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center text-xs text-destructive">
+                <p>{brickError ?? "No pudimos cargar el formulario de tarjeta."}</p>
+                {diagnosticEnabled && (brickDiagnostic || cspViolations.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={copyDiagnostic}
+                    className="mt-3 rounded-md border border-destructive/50 px-3 py-1.5"
+                  >
+                    {copyStatus === "copied" ? "Copiado" : "Copiar diagnóstico"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Shopify remains intact as a temporary fallback, hidden in Phase 1
+                so the customer can never see two actions capable of charging. */}
+            {SHOW_SHOPIFY_FALLBACK && legalAccepted && !isApproved && !isFinalNoRetry && (
               <div className="rounded-2xl border border-neon-blue/40 bg-neon-blue/10 p-5">
                 <div className="text-center">
                   <div className="text-sm font-semibold text-foreground">

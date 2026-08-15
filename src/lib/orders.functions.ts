@@ -1721,6 +1721,23 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
       .eq("id", orderId)
       .maybeSingle();
     if (!order) throw new Error("Pedido no encontrado");
+    // Chile payments must use the canonical server-side CLP total as a
+    // positive integer. Validate before reserving an attempt so an invalid
+    // order can never reach Mercado Pago or lock the payment state machine.
+    const serverAmount = Number(order.total_amount);
+    if (
+      !Number.isFinite(serverAmount) ||
+      serverAmount <= 0 ||
+      !Number.isInteger(serverAmount) ||
+      order.currency !== "CLP"
+    ) {
+      return {
+        ok: false as const,
+        code: "invalid_canonical_amount" as const,
+        status: order.payment_status as PaymentStatus,
+        message: "El monto o la moneda del pedido no son válidos para pagar",
+      };
+    }
     if ((order as any).design_status !== "ready") {
       return {
         ok: false as const,
@@ -1890,7 +1907,6 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
     }
 
     // 4. Call MP.
-    const serverAmount = Number(order.total_amount);
     const body = {
       transaction_amount: serverAmount,
       token: paymentForm.token,
