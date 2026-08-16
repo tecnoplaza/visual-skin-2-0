@@ -2087,8 +2087,8 @@ export const diagnoseExistingCheckoutProTestPreference = createServerFn({ method
     }
 
     const mp = getMercadoPagoConfig();
-    if (mp.env !== "test" || !mp.collectorId) {
-      throw new Error("Diagnóstico disponible solo con configuración TEST completa");
+    if (mp.env !== "test") {
+      throw new Error("Diagnóstico disponible solo con configuración TEST");
     }
 
     // No sliding renewal: the diagnostic itself must perform no writes.
@@ -2122,7 +2122,7 @@ export const diagnoseExistingCheckoutProTestPreference = createServerFn({ method
       return {
         httpStatus: 0,
         preferenceExists: false,
-        collectorIdMatchesExpected: false,
+        collectorIdMatchesExpected: mp.collectorId ? false : null,
         externalReferenceMatches: false,
         metadataOrderMatches: false,
         initPoint: sanitizeCheckoutProPreferencePoint(null),
@@ -2155,7 +2155,10 @@ export const diagnoseExistingCheckoutProTestPreference = createServerFn({ method
       httpStatus: response.status,
       preferenceExists: response.ok && typeof preference.id === "string",
       collectorIdMatchesExpected:
-        response.ok && String(preference.collector_id ?? "") === mp.collectorId,
+        mp.collectorId === null
+          ? null
+          : response.ok &&
+            String(preference.collector_id ?? "") === mp.collectorId,
       externalReferenceMatches:
         response.ok && preference.external_reference === orderRow.id,
       metadataOrderMatches: response.ok && metadata.order_id === orderRow.id,
