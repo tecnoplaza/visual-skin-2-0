@@ -1108,7 +1108,6 @@ export const exchangeOrderToken = createServerFn({ method: "POST" })
 // Resolve a valid session for a given orderId. Returns id + csrf hash.
 async function requireOrderSessionWithId(
   orderId: string,
-  renewSession = true,
 ): Promise<{ orderId: string; sessionId: string; csrfTokenHash: string | null }> {
   const raw = getCookie(SESSION_COOKIE);
   if (!raw) throw new Error("Sesión no encontrada");
@@ -1131,19 +1130,17 @@ async function requireOrderSessionWithId(
   }
   if (s.order_id !== orderId) throw new Error("Sesión no autorizada");
 
-  if (renewSession) {
-    // Sliding renewal, capped by absolute_expires_at.
-    const remaining = new Date(s.expires_at).getTime() - now;
-    const absCap = s.absolute_expires_at
-      ? new Date(s.absolute_expires_at).getTime()
-      : now + SESSION_ABSOLUTE_TTL_SECONDS * 1000;
-    const patch: Record<string, string> = { last_seen_at: new Date(now).toISOString() };
-    if (remaining < SESSION_RENEW_THRESHOLD_S * 1000) {
-      const newExp = Math.min(now + SESSION_TTL_SECONDS * 1000, absCap);
-      patch.expires_at = new Date(newExp).toISOString();
-    }
-    await supabaseAdmin.from("payment_sessions").update(patch as any).eq("id", s.id);
+  // Sliding renewal, capped by absolute_expires_at.
+  const remaining = new Date(s.expires_at).getTime() - now;
+  const absCap = s.absolute_expires_at
+    ? new Date(s.absolute_expires_at).getTime()
+    : now + SESSION_ABSOLUTE_TTL_SECONDS * 1000;
+  const patch: Record<string, string> = { last_seen_at: new Date(now).toISOString() };
+  if (remaining < SESSION_RENEW_THRESHOLD_S * 1000) {
+    const newExp = Math.min(now + SESSION_TTL_SECONDS * 1000, absCap);
+    patch.expires_at = new Date(newExp).toISOString();
   }
+  await supabaseAdmin.from("payment_sessions").update(patch as any).eq("id", s.id);
   return {
     orderId: s.order_id,
     sessionId: s.id,
@@ -1159,9 +1156,8 @@ async function requireOrderSession(orderId: string): Promise<string> {
 /** Convenience: load session + enforce CSRF header for mutating fns. */
 async function requireOrderSessionAndCsrf(
   orderId: string,
-  renewSession = true,
 ): Promise<{ orderId: string; sessionId: string }> {
-  const s = await requireOrderSessionWithId(orderId, renewSession);
+  const s = await requireOrderSessionWithId(orderId);
   assertCsrfToken(s.csrfTokenHash, { sessionId: s.sessionId, orderId: s.orderId });
   return { orderId: s.orderId, sessionId: s.sessionId };
 }
@@ -1554,8 +1550,6 @@ export const getOrderBySession = createServerFn({ method: "POST" })
 
     return {
       ...orderRow,
-      preferenceDiagnosticAvailable:
-        process.env.VERCEL_ENV === "preview" && cfg.mpEnv === "test",
       case_design_url: caseUrl,
       garment_design_url: garmentUrl,
       secondary_garment_design_url: secondaryGarmentUrl,
@@ -1979,204 +1973,6 @@ export const reconcileMercadoPagoCheckoutProReturn = createServerFn({ method: "P
     return applyCheckoutProPayment(order as any, payment, mp);
   });
 
-// TEMP TEST-only, read-only diagnostic for VS-2026-001052.
-// No browser input, Supabase access, payment mutation, or sensitive fields.
-export const diagnoseExistingMercadoPagoTestPayment = createServerFn({ method: "GET" })
-  .handler(async () => {
-    applyNoStoreHeaders();
-    const mp = getMercadoPagoConfig();
-    if (mp.env !== "test") {
-      throw new Error("Diagnóstico no disponible fuera de TEST");
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(
-        "https://api.mercadopago.com/v1/payments/1327884572",
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${mp.accessToken}` },
-        },
-      );
-    } catch {
-      return {
-        exists: false,
-        httpStatus: 0,
-        status: null,
-        statusDetail: null,
-        liveMode: null,
-        currency: null,
-        amount: null,
-        externalReferenceMatches: false,
-        paymentMethod: null,
-      };
-    }
-
-    let payment: Record<string, unknown> = {};
-    if (response.ok) {
-      try {
-        const parsed: unknown = await response.json();
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          payment = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // Invalid JSON is reported only through the closed diagnostic shape.
-      }
-    }
-
-    const safeCode = (value: unknown): string | null =>
-      typeof value === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(value)
-        ? value
-        : null;
-    const amount =
-      typeof payment.transaction_amount === "number" &&
-      Number.isFinite(payment.transaction_amount)
-        ? payment.transaction_amount
-        : null;
-
-    return {
-      exists: response.ok,
-      httpStatus: response.status,
-      status: safeCode(payment.status),
-      statusDetail: safeCode(payment.status_detail),
-      liveMode:
-        typeof payment.live_mode === "boolean" ? payment.live_mode : null,
-      currency: safeCode(payment.currency_id),
-      amount,
-      externalReferenceMatches:
-        payment.external_reference === "1f4c6347-5a98-425d-89d4-19fdf7b114e9",
-      paymentMethod: safeCode(payment.payment_method_id),
-    };
-  });
-
-type CheckoutProPreferencePointDiagnostic = {
-  present: boolean;
-  protocol: string | null;
-  hostname: string | null;
-  pathname: string | null;
-};
-
-function sanitizeCheckoutProPreferencePoint(
-  value: unknown,
-): CheckoutProPreferencePointDiagnostic {
-  if (typeof value !== "string" || value.length === 0) {
-    return { present: false, protocol: null, hostname: null, pathname: null };
-  }
-  try {
-    const url = new URL(value);
-    return {
-      present: true,
-      protocol: url.protocol,
-      hostname: url.hostname,
-      pathname: url.pathname,
-    };
-  } catch {
-    return { present: true, protocol: null, hostname: null, pathname: null };
-  }
-}
-
-// TEMP Preview+TEST-only, session-bound and strictly read-only.
-// Reads the preference id server-side and returns only a closed diagnostic.
-export const diagnoseExistingCheckoutProTestPreference = createServerFn({ method: "POST" })
-  .inputValidator((i) => CheckoutProOrderInput.parse(i))
-  .handler(async ({ data }) => {
-    applyNoStoreHeaders();
-    assertSameOrigin();
-    if (process.env.VERCEL_ENV !== "preview") {
-      throw new Error("Diagnóstico disponible solo en Vercel Preview");
-    }
-
-    const mp = getMercadoPagoConfig();
-    if (mp.env !== "test") {
-      throw new Error("Diagnóstico disponible solo con configuración TEST");
-    }
-
-    // No sliding renewal: the diagnostic itself must perform no writes.
-    const sess = await requireOrderSessionAndCsrf(data.orderId, false);
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: order, error } = await supabaseAdmin
-      .from("custom_orders")
-      .select("id,mercadopago_preference_id,mercadopago_preference_environment")
-      .eq("id", sess.orderId)
-      .maybeSingle();
-    if (error || !order) throw new Error("Pedido no encontrado");
-    const orderRow = order as any;
-    if (orderRow.mercadopago_preference_environment !== "test") {
-      throw new Error("El pedido no tiene una preferencia TEST");
-    }
-    const preferenceId = orderRow.mercadopago_preference_id;
-    if (typeof preferenceId !== "string" || preferenceId.length === 0) {
-      throw new Error("El pedido no tiene una preferencia almacenada");
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(
-        `https://api.mercadopago.com/checkout/preferences/${encodeURIComponent(preferenceId)}`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${mp.accessToken}` },
-        },
-      );
-    } catch {
-      return {
-        httpStatus: 0,
-        preferenceExists: false,
-        collectorIdMatchesExpected: mp.collectorId ? false : null,
-        externalReferenceMatches: false,
-        metadataOrderMatches: false,
-        initPoint: sanitizeCheckoutProPreferencePoint(null),
-        sandboxInitPoint: sanitizeCheckoutProPreferencePoint(null),
-        expires: null,
-        expirationDateFromPresent: false,
-        expirationDateToPresent: false,
-      };
-    }
-
-    let preference: Record<string, unknown> = {};
-    if (response.ok) {
-      try {
-        const parsed: unknown = await response.json();
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          preference = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // Invalid JSON is represented only by the closed diagnostic shape.
-      }
-    }
-    const metadata =
-      preference.metadata &&
-      typeof preference.metadata === "object" &&
-      !Array.isArray(preference.metadata)
-        ? (preference.metadata as Record<string, unknown>)
-        : {};
-
-    return {
-      httpStatus: response.status,
-      preferenceExists: response.ok && typeof preference.id === "string",
-      collectorIdMatchesExpected:
-        mp.collectorId === null
-          ? null
-          : response.ok &&
-            String(preference.collector_id ?? "") === mp.collectorId,
-      externalReferenceMatches:
-        response.ok && preference.external_reference === orderRow.id,
-      metadataOrderMatches: response.ok && metadata.order_id === orderRow.id,
-      initPoint: sanitizeCheckoutProPreferencePoint(preference.init_point),
-      sandboxInitPoint: sanitizeCheckoutProPreferencePoint(
-        preference.sandbox_init_point,
-      ),
-      expires:
-        typeof preference.expires === "boolean" ? preference.expires : null,
-      expirationDateFromPresent:
-        typeof preference.expiration_date_from === "string" &&
-        preference.expiration_date_from.length > 0,
-      expirationDateToPresent:
-        typeof preference.expiration_date_to === "string" &&
-        preference.expiration_date_to.length > 0,
-    };
-  });
-
 export const processMercadoPagoPayment = createServerFn({ method: "POST" })
   .inputValidator((i) => PaymentInput.parse(i))
   .handler(async ({ data }) => {
@@ -2435,15 +2231,6 @@ export const processMercadoPagoPayment = createServerFn({ method: "POST" })
       },
       notification_url: notificationUrl,
     };
-
-    console.info("[MP credential diagnostic]", {
-      env: mp.env,
-      accessTokenPresent: accessToken.length > 0,
-      publicKeyPresent: mp.publicKey.length > 0,
-      webhookSecretPresent: mp.webhookSecret.length > 0,
-      accessTokenLooksTest: "unknown" as const,
-      publicKeyLooksTest: "unknown" as const,
-    });
 
     let res: Response;
     try {

@@ -6,7 +6,6 @@ import {
   getOrderBySession,
   getOrderCsrfToken,
   createMercadoPagoCheckoutPro,
-  diagnoseExistingCheckoutProTestPreference,
   reconcileMercadoPagoCheckoutProReturn,
   createShopifyCheckout,
   unlockOrderDesign,
@@ -75,12 +74,7 @@ type Order = {
   canRetryPayment?: boolean;
   legal_accepted_at?: string | null;
   legal_acceptance_hash?: string | null;
-  preferenceDiagnosticAvailable?: boolean;
 };
-
-type CheckoutProPreferenceDiagnostic = Awaited<
-  ReturnType<typeof diagnoseExistingCheckoutProTestPreference>
->;
 
 
 
@@ -118,10 +112,6 @@ function PedidoView() {
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
-  const [preferenceDiagnosticLoading, setPreferenceDiagnosticLoading] = useState(false);
-  const [preferenceDiagnostic, setPreferenceDiagnostic] =
-    useState<CheckoutProPreferenceDiagnostic | null>(null);
-  const [preferenceDiagnosticError, setPreferenceDiagnosticError] = useState<string | null>(null);
   const [shopifyProcessing, setShopifyProcessing] = useState(false);
   const [shopifyError, setShopifyError] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
@@ -358,25 +348,6 @@ function PedidoView() {
       submitLockRef.current = false;
     }
   }, [order, processing]);
-
-  const handlePreferenceDiagnostic = useCallback(async () => {
-    if (!order?.preferenceDiagnosticAvailable || preferenceDiagnosticLoading) return;
-    setPreferenceDiagnosticLoading(true);
-    setPreferenceDiagnostic(null);
-    setPreferenceDiagnosticError(null);
-    try {
-      const result = await diagnoseExistingCheckoutProTestPreference({
-        data: { orderId: order.id },
-      });
-      setPreferenceDiagnostic(result);
-    } catch (error) {
-      setPreferenceDiagnosticError(
-        error instanceof Error ? error.message : "No se pudo ejecutar el diagnóstico.",
-      );
-    } finally {
-      setPreferenceDiagnosticLoading(false);
-    }
-  }, [order, preferenceDiagnosticLoading]);
 
   useEffect(() => {
     if (!sessionReady || !mpReturn || !returnPaymentId) return;
@@ -717,34 +688,6 @@ function PedidoView() {
                   {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
                   {processing ? "Abriendo Mercado Pago…" : "Pagar con Mercado Pago"}
                 </button>
-              </div>
-            )}
-            {order.preferenceDiagnosticAvailable && (
-              <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-4">
-                <p className="text-xs font-semibold text-amber-200">
-                  Diagnóstico temporal Checkout Pro — Preview TEST
-                </p>
-                <button
-                  type="button"
-                  disabled={preferenceDiagnosticLoading}
-                  onClick={() => void handlePreferenceDiagnostic()}
-                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-300/50 px-3 py-2 text-xs text-amber-100 disabled:opacity-60"
-                >
-                  {preferenceDiagnosticLoading && (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  )}
-                  Consultar preferencia existente
-                </button>
-                {preferenceDiagnosticError && (
-                  <p className="mt-3 text-xs text-destructive">
-                    {preferenceDiagnosticError}
-                  </p>
-                )}
-                {preferenceDiagnostic && (
-                  <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-[11px] text-amber-50">
-                    {JSON.stringify(preferenceDiagnostic, null, 2)}
-                  </pre>
-                )}
               </div>
             )}
             {/* Shopify remains intact as a temporary fallback, hidden in Phase 1
