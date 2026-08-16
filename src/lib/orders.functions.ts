@@ -1492,6 +1492,8 @@ export const getOrderBySession = createServerFn({ method: "POST" })
       .select("id,status")
       .eq("order_id", orderId)
       .in("status", ["processing", "pending", "awaiting_reconciliation"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     // Sign short-lived read URLs for private design paths. Fall back to
@@ -1719,6 +1721,257 @@ function buildMercadoPagoNotificationUrl(baseUrl: string | null): string | null 
     return null;
   }
 }
+
+function buildCheckoutProSiteOrigin(cfg: ReturnType<typeof getServerConfig>): string | null {
+  const rawVercel = process.env.VERCEL_URL?.trim() ?? "";
+  if (process.env.VERCEL_ENV === "preview" && rawVercel) {
+    if (/\s|[/?#@:'"\\]/.test(rawVercel)) return null;
+    try {
+      const url = new URL(`https://${rawVercel}`);
+      if (
+        url.protocol !== "https:" ||
+        !url.hostname.endsWith(".vercel.app") ||
+        url.port || url.username || url.password ||
+        url.pathname !== "/" || url.search || url.hash
+      ) return null;
+      return url.origin;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const url = new URL(cfg.siteOrigin);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildCheckoutProBackUrl(origin: string, orderId: string, result: "success" | "pending" | "failure"): string {
+  const url = new URL(`/pedido/${orderId}`, origin);
+  url.searchParams.set("mp_return", result);
+  return url.toString();
+}
+
+const CheckoutProPayment = z.object({
+  id: z.union([z.string(), z.number()]),
+  status: z.string(),
+  status_detail: z.string().nullable().optional(),
+  live_mode: z.boolean(),
+  transaction_amount: z.number(),
+  currency_id: z.string(),
+  external_reference: z.string().nullable().optional(),
+  metadata: z.object({ order_id: z.string().optional() }).passthrough().nullable().optional(),
+  payment_type_id: z.string(),
+  collector_id: z.union([z.string(), z.number()]).nullable().optional(),
+});
+
+const CheckoutProOrderInput = z.object({ orderId: z.string().uuid() });
+const CheckoutProReturnInput = z.object({
+  orderId: z.string().uuid(),
+  paymentId: z.string().regex(/^[0-9]{1,30}$/),
+});
+
+function checkoutTitle(packType: string): string {
+  const labels: Record<string, string> = {
+    carcasa: "Carcasa personalizada VisualSkin",
+    "carcasa+polera": "Pack carcasa y polera VisualSkin",
+    "carcasa+poleron": "Pack carcasa y polerón VisualSkin",
+    "carcasa+polera+poleron": "Pack completo VisualSkin",
+  };
+  return labels[packType] ?? "Pedido personalizado VisualSkin";
+}
+
+function validateCheckoutUrl(raw: unknown, env: "test" | "production"): string | null {
+  if (typeof raw !== "string" || !raw || /\s/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    const testHosts = new Set(["sandbox.mercadopago.com", "sandbox.mercadopago.cl"]);
+    const productionHosts = new Set(["www.mercadopago.com", "www.mercadopago.cl"]);
+    const hosts = env === "test" ? testHosts : productionHosts;
+    if (url.protocol !== "https:" || !hosts.has(url.hostname) || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function applyCheckoutProPayment(
+  order: { id: string; total_amount: number; currency: string; payment_environment: string; is_live_mode: boolean },
+  paymentRaw: unknown,
+  mp: ReturnType<typeof getMercadoPagoConfig>,
+) {
+  const parsed = CheckoutProPayment.safeParse(paymentRaw);
+  if (!parsed.success) throw new Error("Respuesta de pago inválida");
+  const payment = parsed.data;
+  const paymentId = String(payment.id);
+  const metadataOrderId = payment.metadata?.order_id ?? null;
+  const collectorId = payment.collector_id == null ? null : String(payment.collector_id);
+  if (
+    payment.external_reference !== order.id ||
+    metadataOrderId !== order.id ||
+    payment.transaction_amount !== Number(order.total_amount) ||
+    payment.currency_id !== "CLP" || order.currency !== "CLP" ||
+    payment.live_mode !== order.is_live_mode ||
+    order.payment_environment !== mp.env ||
+    (mp.collectorId && collectorId !== mp.collectorId)
+  ) throw new Error("El pago no coincide con el pedido");
+
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: attached, error: attachError } = await supabaseAdmin.rpc(
+    "attach_mercado_pago_checkout_pro_attempt" as any,
+    { p_order_id: order.id, p_payment_id: paymentId, p_payment_environment: mp.env, p_is_live_mode: mp.isLiveMode } as any,
+  );
+  if (attachError) throw new Error("No se pudo asociar el pago");
+  const attach = attached as { ok?: boolean; code?: string; attempt_id?: string };
+  if (!attach?.ok || !attach.attempt_id) throw new Error(`No se pudo asociar el pago: ${attach?.code ?? "unknown"}`);
+
+  const { data: applied, error: applyError } = await supabaseAdmin.rpc(
+    "apply_mercado_pago_payment_response" as any,
+    {
+      p_order_id: order.id, p_attempt_id: attach.attempt_id, p_payment_id: paymentId,
+      p_payment_status: payment.status, p_status_detail: payment.status_detail ?? null,
+      p_live_mode: payment.live_mode, p_transaction_amount: payment.transaction_amount,
+      p_currency_id: payment.currency_id, p_external_reference: payment.external_reference,
+      p_metadata_order_id: metadataOrderId, p_metadata_attempt_id: null,
+      p_payment_type_id: payment.payment_type_id, p_collector_id: collectorId,
+      p_expected_collector_id: mp.collectorId,
+    } as any,
+  );
+  if (applyError) throw new Error("No se pudo aplicar el estado del pago");
+  const result = applied as { ok?: boolean; order_status?: PaymentStatus; reason?: string };
+  if (!result?.ok) throw new Error(`Pago pendiente de conciliación: ${result?.reason ?? "unknown"}`);
+  return { status: result.order_status ?? "pending" };
+}
+
+export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
+  .inputValidator((i) => CheckoutProOrderInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceRateLimit("checkout_pro_preference", hashBucketKey("checkout_pro_preference", sess.orderId), RATE_LIMITS.checkout_pro_preference.limit, RATE_LIMITS.checkout_pro_preference.window);
+    const cfg = getServerConfig();
+    if (!cfg.paymentsEnabled) throw new Error("Los pagos están temporalmente deshabilitados");
+    const mp = getMercadoPagoConfig();
+    if (mp.env === "production") assertProductionPaymentsConfigured();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order } = await supabaseAdmin.from("custom_orders")
+      .select("id,order_number,pack_type,total_amount,currency,payment_status,customer_email,design_status,payment_environment,is_live_mode,legal_accepted_at")
+      .eq("id", sess.orderId).maybeSingle();
+    if (!order) throw new Error("Pedido no encontrado");
+    if (!(order as any).legal_accepted_at) throw new Error("Debes aceptar las condiciones antes de pagar");
+    if (["approved", "refunded", "charged_back"].includes(order.payment_status)) throw new Error("Este pedido ya no admite pagos");
+    if (order.design_status !== "ready") throw new Error("Los diseños del pedido aún no están listos");
+    const { data: activeAttempt } = await supabaseAdmin.from("payment_attempts")
+      .select("id").eq("order_id", order.id)
+      .in("status", ["processing", "pending", "awaiting_reconciliation"])
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (activeAttempt) throw new Error("Estamos verificando un pago existente; no vuelvas a pagar todavía");
+    const amount = Number(order.total_amount);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || order.currency !== "CLP") throw new Error("Monto canónico inválido");
+    if ((order as any).payment_environment !== mp.env || (order as any).is_live_mode !== mp.isLiveMode) throw new Error("Entorno de pago incompatible");
+    if (!z.string().email().safeParse(order.customer_email).success) throw new Error("Email del pedido inválido");
+    const notificationUrl = buildMercadoPagoNotificationUrl(cfg.supabaseAdminUrl);
+    const siteOrigin = buildCheckoutProSiteOrigin(cfg);
+    if (!notificationUrl || !siteOrigin) throw new Error("Configuración de URLs de pago inválida");
+
+    // Atomically claim preference creation. Concurrent tabs reuse the
+    // backend-owned URL or wait briefly; they do not issue a second POST.
+    const claimToken = randomUUID();
+    let claimed = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const { data: claimRaw, error: claimError } = await supabaseAdmin.rpc(
+        "claim_mercado_pago_checkout_pro_preference" as any,
+        { p_order_id: order.id, p_environment: mp.env, p_claim_token: claimToken } as any,
+      );
+      if (claimError) throw new Error("No se pudo reservar el checkout");
+      const claim = claimRaw as { ok?: boolean; code?: string; checkout_url?: unknown };
+      if (claim.ok && claim.code === "reused") {
+        const checkoutUrl = validateCheckoutUrl(claim.checkout_url, mp.env);
+        if (!checkoutUrl) throw new Error("La preferencia guardada no es válida");
+        return { checkoutUrl };
+      }
+      if (claim.ok && claim.code === "claimed") { claimed = true; break; }
+      if (claim.code !== "creation_in_progress") {
+        throw new Error("Este pedido no puede iniciar un checkout ahora");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!claimed) throw new Error("Mercado Pago se está abriendo en otra pestaña");
+
+    const preferenceCreatedAt = new Date();
+    const preferenceExpiresAt = new Date(preferenceCreatedAt.getTime() + 30 * 60 * 1000);
+    const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${mp.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: [{ id: order.id, title: checkoutTitle(order.pack_type), quantity: 1, currency_id: "CLP", unit_price: amount }],
+        external_reference: order.id,
+        payer: { email: order.customer_email },
+        notification_url: notificationUrl,
+        back_urls: {
+          success: buildCheckoutProBackUrl(siteOrigin, order.id, "success"),
+          pending: buildCheckoutProBackUrl(siteOrigin, order.id, "pending"),
+          failure: buildCheckoutProBackUrl(siteOrigin, order.id, "failure"),
+        },
+          auto_return: "approved",
+          expires: true,
+          expiration_date_from: preferenceCreatedAt.toISOString(),
+          expiration_date_to: preferenceExpiresAt.toISOString(),
+          metadata: { order_id: order.id, order_number: order.order_number, pack_type: order.pack_type },
+      }),
+    });
+    let body: { id?: unknown; init_point?: unknown; sandbox_init_point?: unknown } = {};
+    try { body = await response.json(); } catch { /* closed response below */ }
+    if (!response.ok) {
+      await supabaseAdmin.rpc(
+        "release_mercado_pago_checkout_pro_preference_claim" as any,
+        { p_order_id: order.id, p_claim_token: claimToken } as any,
+      );
+      throw new Error("Mercado Pago no pudo iniciar el checkout");
+    }
+    const rawUrl = mp.env === "test" ? body.sandbox_init_point : body.init_point;
+    const checkoutUrl = validateCheckoutUrl(rawUrl, mp.env);
+    if (!checkoutUrl) throw new Error("Mercado Pago devolvió una URL de checkout inválida");
+    if (typeof body.id !== "string" || !body.id.trim() || body.id.length > 200) {
+      throw new Error("Mercado Pago devolvió una preferencia inválida");
+    }
+    const { data: storeRaw, error: storeError } = await supabaseAdmin.rpc(
+      "store_mercado_pago_checkout_pro_preference" as any,
+      { p_order_id: order.id, p_environment: mp.env, p_claim_token: claimToken,
+        p_preference_id: body.id, p_checkout_url: checkoutUrl,
+        p_expires_at: preferenceExpiresAt.toISOString() } as any,
+    );
+    const stored = storeRaw as { ok?: boolean };
+    if (storeError || !stored?.ok) {
+      throw new Error("No se pudo guardar el checkout de forma segura");
+    }
+    return { checkoutUrl };
+  });
+
+export const reconcileMercadoPagoCheckoutProReturn = createServerFn({ method: "POST" })
+  .inputValidator((i) => CheckoutProReturnInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const sess = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceRateLimit("checkout_pro_return", hashBucketKey("checkout_pro_return", sess.orderId), RATE_LIMITS.checkout_pro_return.limit, RATE_LIMITS.checkout_pro_return.window);
+    const cfg = getServerConfig();
+    if (!cfg.paymentsEnabled) throw new Error("Los pagos están temporalmente deshabilitados");
+    const mp = getMercadoPagoConfig();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order } = await supabaseAdmin.from("custom_orders")
+      .select("id,total_amount,currency,payment_status,payment_environment,is_live_mode")
+      .eq("id", sess.orderId).maybeSingle();
+    if (!order) throw new Error("Pedido no encontrado");
+    if (["approved", "refunded", "charged_back"].includes(order.payment_status)) return { status: order.payment_status as PaymentStatus };
+    const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(data.paymentId)}`, { headers: { Authorization: `Bearer ${mp.accessToken}` } });
+    if (!response.ok) throw new Error("No pudimos verificar el pago con Mercado Pago");
+    const payment: unknown = await response.json();
+    return applyCheckoutProPayment(order as any, payment, mp);
+  });
 
 // TEMP TEST-only, read-only diagnostic for VS-2026-001052.
 // No browser input, Supabase access, payment mutation, or sensitive fields.

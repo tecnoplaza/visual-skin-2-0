@@ -1,13 +1,12 @@
 ﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { CheckCircle2, Loader2, AlertTriangle, XCircle, Clock, FileText, ExternalLink, Lock } from "lucide-react";
 import {
   exchangeOrderToken,
   getOrderBySession,
   getOrderCsrfToken,
-  getPaymentBrickInit,
-  diagnoseExistingMercadoPagoTestPayment,
-  processMercadoPagoPayment,
+  createMercadoPagoCheckoutPro,
+  reconcileMercadoPagoCheckoutProReturn,
   createShopifyCheckout,
   unlockOrderDesign,
   acceptOrderLegalDocuments,
@@ -15,28 +14,6 @@ import {
 } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { productionDisplayLabel } from "@/lib/production-display";
-
-// Dynamically load the Mercado Pago SDK on the client only. The SDK reads
-// browser globals at import time; keeping it out of the SSR bundle prevents
-// hydration races that leave the CardPayment brick stuck on skeletons after
-// a cold reload.
-const MercadoPagoCardCheckout = lazy(
-  () => import("@/components/payments/MercadoPagoCardCheckout"),
-);
-import type {
-  SanitizedMpError,
-  MercadoPagoDiagnostic,
-  CspDiagnostic,
-  MercadoPagoCardSubmitData,
-} from "@/components/payments/MercadoPagoCardCheckout";
-
-const KNOWN_BRICK_ERRORS = new Set([
-  "fields_setup_failed",
-  "get_payment_methods_failed",
-  "incorrect_initialization",
-  "missing_required_callbacks",
-  "missing_container_id",
-]);
 
 // Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
 // implemented below as a temporary fallback and can be re-enabled deliberately.
@@ -101,15 +78,19 @@ type Order = {
 
 
 
-type Search = { token?: string };
+type Search = {
+  token?: string;
+  mp_return?: "success" | "pending" | "failure";
+  payment_id?: string;
+};
 
 export const Route = createFileRoute("/pedido/$id")({
-  // Private, noindex page. Disabling SSR prevents the Mercado Pago SDK (which
-  // touches browser globals) from being evaluated on the server and avoids
-  // hydration mismatches that leave CardPayment stuck on skeletons.
+  // Private, noindex order page. Checkout Pro redirects from the browser only.
   ssr: false,
   validateSearch: (s: Record<string, unknown>): Search => ({
     token: typeof s.token === "string" ? s.token : undefined,
+    mp_return: s.mp_return === "success" || s.mp_return === "pending" || s.mp_return === "failure" ? s.mp_return : undefined,
+    payment_id: typeof s.payment_id === "string" && /^[0-9]{1,30}$/.test(s.payment_id) ? s.payment_id : undefined,
   }),
   component: PedidoView,
   head: () => ({
@@ -121,76 +102,30 @@ export const Route = createFileRoute("/pedido/$id")({
   }),
 });
 
-type BrickInit = {
-  publicKey: string;
-  amount: number;
-  payerEmail: string | null;
-  environment: "test" | "live";
-};
-
-type ExistingPaymentDiagnostic = {
-  exists: boolean;
-  httpStatus: number;
-  status: string | null;
-  statusDetail: string | null;
-  liveMode: boolean | null;
-  currency: string | null;
-  amount: number | null;
-  externalReferenceMatches: boolean;
-  paymentMethod: string | null;
-};
-
 function PedidoView() {
   const { id } = Route.useParams();
-  const { token } = Route.useSearch();
+  const { token, mp_return: mpReturn, payment_id: returnPaymentId } = Route.useSearch();
   const navigate = useNavigate();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  const [brickStatus, setBrickStatus] = useState<
-    "idle" | "loading" | "mounted" | "ready" | "error"
-  >("idle");
-  const [brickSlow, setBrickSlow] = useState(false);
-  const [brickError, setBrickError] = useState<string | null>(null);
-  const [brickDiagnostic, setBrickDiagnostic] =
-    useState<SanitizedMpError | null>(null);
-  const [cspViolations, setCspViolations] = useState<CspDiagnostic[]>([]);
-  const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
   const [payError, setPayError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [shopifyProcessing, setShopifyProcessing] = useState(false);
   const [shopifyError, setShopifyError] = useState<string | null>(null);
-  const [paymentsDisabled, setPaymentsDisabled] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
-  const [brickInit, setBrickInit] = useState<BrickInit | null>(null);
   const [legalChecked, setLegalChecked] = useState(false);
   const [legalSubmitting, setLegalSubmitting] = useState(false);
   const [legalError, setLegalError] = useState<string | null>(null);
   const [legalAvailable, setLegalAvailable] = useState<boolean | null>(null);
-  const [paymentDiagnostic, setPaymentDiagnostic] =
-    useState<ExistingPaymentDiagnostic | null>(null);
-  const [paymentDiagnosticError, setPaymentDiagnosticError] =
-    useState<string | null>(null);
-  const [paymentDiagnosticRunning, setPaymentDiagnosticRunning] =
-    useState(false);
-  const [paymentDiagnosticInvoked, setPaymentDiagnosticInvoked] =
-    useState(false);
   const legalSubmitLockRef = useRef(false);
   const submitLockRef = useRef(false);
+  const returnReconcileRef = useRef<string | null>(null);
   // Â§9 One in-flight unlock per order. `unlockedForRef` records the payment
   // status we unlocked for, so we never re-issue an unlock in a loop.
   const unlockInFlightRef = useRef(false);
   const unlockedForRef = useRef<string | null>(null);
-
-  // Cold-reload guard: never touch the Brick until React has fully hydrated
-  // on the client. Prevents SSR/hydration races that leave the SDK attached
-  // to a detached node (root cause of "skeleton stuck forever" after F5 on
-  // a rejected order).
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
 
 
   // ---- Load order via cookie session ----
@@ -399,243 +334,39 @@ function PedidoView() {
     }
   }, [order, shopifyProcessing]);
 
-  // Initialize Mercado Pago only when this order can start a payment. Once
-  // obtained, keep this configuration latched: polling must never clear it or
-  // recreate the mounted Brick while a submit is in flight.
-  useEffect(() => {
-    if (!hydrated || !sessionReady || !order || brickInit) return;
-    const canInitialize =
-      !order.hasActiveAttempt &&
-      order.design_status === "ready" &&
-      !!order.legal_accepted_at &&
-      (order.payment_status === "pending" ||
-        order.payment_status === "rejected" ||
-        order.payment_status === "cancelled" ||
-        order.canRetryPayment === true);
-    if (!canInitialize) return;
+  const handleMercadoPagoCheckout = useCallback(async () => {
+    if (!order || processing || submitLockRef.current || order.hasActiveAttempt) return;
+    submitLockRef.current = true;
+    setProcessing(true);
+    setPayError(null);
+    try {
+      const result = await createMercadoPagoCheckoutPro({ data: { orderId: order.id } });
+      window.location.assign(result.checkoutUrl);
+    } catch (error) {
+      setPayError(error instanceof Error ? error.message : "No pudimos abrir Mercado Pago.");
+      setProcessing(false);
+      submitLockRef.current = false;
+    }
+  }, [order, processing]);
 
-    let cancelled = false;
-    setBrickStatus("loading");
-    setBrickSlow(false);
-    setBrickError(null);
+  useEffect(() => {
+    if (!sessionReady || !mpReturn || !returnPaymentId) return;
+    const key = `${id}:${returnPaymentId}`;
+    if (returnReconcileRef.current === key) return;
+    returnReconcileRef.current = key;
+    setProcessing(true);
     setPayError(null);
     void (async () => {
       try {
-        const init = await getPaymentBrickInit({ data: { orderId: order.id } });
-        if (cancelled) return;
-        if (!init.paymentsEnabled) {
-          setPaymentsDisabled(true);
-          setBrickStatus("idle");
-          return;
-        }
-        setPaymentsDisabled(false);
-        if (!init.payable) {
-          setBrickStatus("idle");
-          return;
-        }
-        if (!init.publicKey || typeof init.publicKey !== "string") {
-          throw new Error("Public Key de Mercado Pago no disponible");
-        }
-        const amount = Number(init.amount);
-        if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
-          throw new Error("Monto de pago inválido");
-        }
-        setBrickInit({
-          publicKey: init.publicKey,
-          amount,
-          payerEmail: init.payerEmail ?? null,
-          environment:
-            (init as { environment?: string }).environment === "live"
-              ? "live"
-              : "test",
-        });
-      } catch (error) {
-        if (cancelled) return;
-        console.error("[MP Brick init]", error);
-        setBrickStatus("error");
-        setBrickError("No pudimos cargar el formulario de tarjeta.");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    hydrated,
-    sessionReady,
-    order?.id,
-    order?.payment_status,
-    order?.design_status,
-    order?.hasActiveAttempt,
-    order?.canRetryPayment,
-    order?.legal_accepted_at,
-    brickInit,
-  ]);
-
-  // Stable submit callback. MercadoPagoCardCheckout already strips the SDK
-  // payload; this second allow-list makes the server boundary explicit.
-  const orderIdPrimitive = order?.id ?? null;
-  const handleBrickSubmit = useCallback(
-    async (cardFormData: MercadoPagoCardSubmitData) => {
-      if (!orderIdPrimitive) return;
-      if (submitLockRef.current) return;
-      const formData: MercadoPagoCardSubmitData = {
-        token: cardFormData.token,
-        payment_method_id: cardFormData.payment_method_id,
-        installments: cardFormData.installments,
-        ...(cardFormData.issuer_id !== undefined
-          ? { issuer_id: cardFormData.issuer_id }
-          : {}),
-        ...(cardFormData.payer?.email
-          ? { payer: { email: cardFormData.payer.email } }
-          : {}),
-      };
-      submitLockRef.current = true;
-      setProcessing(true);
-      setPayError(null);
-      try {
-        const r = await processMercadoPagoPayment({
-          data: { orderId: orderIdPrimitive, formData },
-        });
-
-        if (!r.ok) {
-          const code = (r as { code?: string }).code;
-          if (
-            code === "payments_disabled" ||
-            code === "environment_mismatch" ||
-            code === "production_config_incomplete"
-          ) {
-            setPaymentsDisabled(true);
-          }
-          if (code === "awaiting_confirmation") {
-            setPayError(
-              "Estamos esperando la confirmación de Mercado Pago para tu pago anterior. Esta pantalla se actualiza automáticamente.",
-            );
-          } else if (code === "awaiting_reconciliation") {
-            setPayError(
-              "Perdimos la conexión con Mercado Pago justo después de enviar el cobro. Estamos verificando si el pago quedó registrado; no vuelvas a pagar hasta que se confirme.",
-            );
-          } else if (code === "design_not_ready") {
-            setPayError("Los diseños del pedido aún no están listos.");
-          } else if (code === "order_locked") {
-            setPayError("Este pedido ya no admite nuevos pagos.");
-          } else {
-            setPayError(r.message ?? "Pago rechazado");
-          }
-        }
+        await reconcileMercadoPagoCheckoutProReturn({ data: { orderId: id, paymentId: returnPaymentId } });
         await loadOrderRef.current();
-      } catch (e) {
-        setPayError(
-          e instanceof Error ? e.message : "Error al procesar el pago",
-        );
+      } catch (error) {
+        setPayError(error instanceof Error ? error.message : "No pudimos verificar el pago todavía.");
       } finally {
         setProcessing(false);
-        submitLockRef.current = false;
       }
-    },
-    [orderIdPrimitive],
-  );
-
-  const handleBrickMounted = useCallback(() => {
-    console.info("[MP Brick] mounted");
-    setBrickStatus((prev) => (prev === "ready" ? prev : "mounted"));
-    setBrickError(null);
-  }, []);
-
-  const handleBrickReady = useCallback(() => {
-    console.info("[MP Brick] onReady");
-    setBrickStatus("ready");
-    setBrickSlow(false);
-    setBrickError(null);
-    setBrickDiagnostic(null);
-  }, []);
-
-  const handleBrickSlowReady = useCallback(() => {
-    console.warn("[MP Brick] slow-ready");
-    setBrickSlow(true);
-  }, []);
-
-  const handleBrickError = useCallback((err: SanitizedMpError) => {
-    // Non-critical events (e.g. `no_payment_method_for_provided_bin`) are
-    // field-level signals emitted after `onReady`. They must not tear down
-    // the Brick, hide the form, clear typed data, or trigger a retry.
-    if (err.severity === "non_critical") {
-      // Client component already logged a sanitized [MP Card] non-critical.
-      return;
-    }
-    console.error("[MP Brick] onError", err);
-    const type = err.type ?? err.name ?? null;
-    const known =
-      (type && KNOWN_BRICK_ERRORS.has(type)) ||
-      (err.causeCode && KNOWN_BRICK_ERRORS.has(err.causeCode));
-    setBrickStatus("error");
-    setBrickSlow(false);
-    setBrickError(
-      known
-        ? `No pudimos cargar el formulario de tarjeta (${type}). Reintenta`
-        : "No pudimos cargar el formulario de tarjeta. Reintenta",
-    );
-    setBrickDiagnostic(err);
-  }, []);
-
-  const handleBrickDiagnostic = useCallback((d: MercadoPagoDiagnostic) => {
-    if (d.kind === "csp") {
-      setCspViolations((prev) => {
-        // De-dup by directive+origin.
-        const key = `${d.effectiveDirective ?? ""}|${d.blockedOrigin ?? ""}`;
-        if (
-          prev.some(
-            (p) =>
-              `${p.effectiveDirective ?? ""}|${p.blockedOrigin ?? ""}` === key,
-          )
-        ) {
-          return prev;
-        }
-        return [...prev, d].slice(-5);
-      });
-    }
-  }, []);
-
-  const diagnosticEnabled = brickInit?.environment === "test";
-
-  const copyDiagnostic = useCallback(async () => {
-    const payload = {
-      error: brickDiagnostic,
-      csp: cspViolations.map((c) => ({
-        effectiveDirective: c.effectiveDirective,
-        blockedOrigin: c.blockedOrigin,
-        sourceOrigin: c.sourceOrigin,
-        disposition: c.disposition,
-      })),
-    };
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus("copied");
-      setTimeout(() => setCopyStatus("idle"), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }, [brickDiagnostic, cspViolations]);
-
-  const runExistingPaymentDiagnostic = useCallback(async () => {
-    if (paymentDiagnosticInvoked || paymentDiagnosticRunning) return;
-    setPaymentDiagnosticInvoked(true);
-    setPaymentDiagnosticRunning(true);
-    setPaymentDiagnosticError(null);
-    try {
-      const result = await diagnoseExistingMercadoPagoTestPayment();
-      setPaymentDiagnostic(result as ExistingPaymentDiagnostic);
-    } catch {
-      setPaymentDiagnosticError("No se pudo ejecutar el diagnóstico read-only.");
-    } finally {
-      setPaymentDiagnosticRunning(false);
-    }
-  }, [paymentDiagnosticInvoked, paymentDiagnosticRunning]);
-
-
-
-
-
-
+    })();
+  }, [sessionReady, mpReturn, returnPaymentId, id]);
   if (loading) {
     return (
       <section className="mx-auto grid min-h-[60vh] max-w-4xl place-items-center px-4">
@@ -667,8 +398,8 @@ function PedidoView() {
       : order.pack_type === "carcasa+polera"
         ? "Carcasa + Polera"
         : order.pack_type === "carcasa+poleron"
-          ? "Carcasa + PolerÃ³n"
-          : "Carcasa + Polera + PolerÃ³n";
+          ? "Carcasa + Polerón"
+          : "Carcasa + Polera + Polerón";
 
   const isApproved = order.payment_status === "approved";
   const isRejected = order.payment_status === "rejected";
@@ -693,15 +424,7 @@ function PedidoView() {
   const legalAccepted = !!order.legal_accepted_at;
   const canRetry =
     (isFreshPending || order.canRetryPayment === true) &&
-    !paymentsDisabled &&
     legalAccepted;
-  // Once initialized, the checkout stays in the tree until the order reaches
-  // a state where a card form is no longer needed. Polling state is not part
-  // of this condition, so processing/locking cannot tear down the Brick.
-  const showBrickCheckout =
-    !!brickInit && legalAccepted && !isApproved && !isFinalNoRetry;
-  const brickInteractionDisabled =
-    processing || order.hasActiveAttempt === true || paymentsDisabled;
   // Show "preparing new attempt" while the auto-unlock is still in-flight.
   const preparingRetry =
     (isRejected || isCancelled) &&
@@ -714,9 +437,6 @@ function PedidoView() {
     !order.hasActiveAttempt &&
     designReady &&
     (isPending || isRejected || isCancelled);
-  const showExistingPaymentDiagnostic =
-    order.id === "1f4c6347-5a98-425d-89d4-19fdf7b114e9" &&
-    order.payment_environment === "test";
 
 
 
@@ -730,30 +450,6 @@ function PedidoView() {
         <p className="mt-2 text-sm text-muted-foreground">
           Revisa tu diseño y paga con Mercado Pago dentro de VISUALSKIN.
         </p>
-        {showExistingPaymentDiagnostic && (
-          <div className="mx-auto mt-4 max-w-xl rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-left text-xs">
-            <button
-              type="button"
-              disabled={paymentDiagnosticInvoked || paymentDiagnosticRunning}
-              onClick={() => void runExistingPaymentDiagnostic()}
-              className="rounded-md border border-yellow-500/50 px-3 py-2 font-medium text-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {paymentDiagnosticRunning
-                ? "Consultando pago TEST…"
-                : paymentDiagnosticInvoked
-                  ? "Diagnóstico ejecutado"
-                  : "Consultar pago TEST existente"}
-            </button>
-            {paymentDiagnostic && (
-              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-yellow-100">
-                {JSON.stringify(paymentDiagnostic, null, 2)}
-              </pre>
-            )}
-            {paymentDiagnosticError && (
-              <p className="mt-3 text-destructive">{paymentDiagnosticError}</p>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
@@ -805,14 +501,14 @@ function PedidoView() {
           </div>
 
           <div className="rounded-2xl border border-border bg-card p-6">
-            <h2 className="font-display text-lg font-semibold">Datos de envÃ­o</h2>
+            <h2 className="font-display text-lg font-semibold">Datos de envío</h2>
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <Field k="Nombre" v={order.customer_name ?? "â€”"} />
               <Field k="Email" v={order.customer_email} />
-              <Field k="TelÃ©fono" v={order.customer_phone ?? "â€”"} />
-              <Field k="DirecciÃ³n" v={order.shipping_address?.address ?? "â€”"} />
+              <Field k="Teléfono" v={order.customer_phone ?? "—"} />
+              <Field k="Dirección" v={order.shipping_address?.address ?? "—"} />
               <Field k="Comuna" v={order.shipping_address?.comuna ?? "â€”"} />
-              <Field k="RegiÃ³n" v={order.shipping_address?.region ?? "â€”"} />
+              <Field k="Región" v={order.shipping_address?.region ?? "—"} />
             </dl>
             {order.shipping_address?.notes && (
               <p className="mt-4 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
@@ -851,7 +547,7 @@ function PedidoView() {
             )}
             <Row k="Despacho" v={order.shipping_amount === 0 ? "Gratis" : `$${order.shipping_amount.toLocaleString("es-CL")}`} />
             <div className="pt-1 text-[10px] leading-relaxed text-muted-foreground/70">
-              EnvÃ­os a todo Chile. El plazo de transporte depende del proveedor logÃ­stico y de la ciudad de destino.
+              Envíos a todo Chile. El plazo de transporte depende del proveedor logístico y de la ciudad de destino.
             </div>
           </div>
           <div className="mt-4 flex items-baseline justify-between border-t border-border pt-4">
@@ -864,7 +560,7 @@ function PedidoView() {
           <div className="mt-6">
             <PaymentStatusBadge status={order.payment_status} />
             <p className="mt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-              ProducciÃ³n:{" "}
+              Producción:{" "}
               <b className="text-foreground">
                 {productionDisplayLabel(order.payment_status, order.fulfillment_status)}
               </b>
@@ -941,7 +637,7 @@ function PedidoView() {
             )}
             {isFreshPending && (
               <div className="rounded-lg border border-neon-blue/40 bg-neon-blue/10 p-3 text-center text-xs text-neon-blue">
-                Completa tu pago con tarjeta de crédito o débito.
+                Tu pedido está listo para continuar al checkout seguro de Mercado Pago.
               </div>
             )}
 
@@ -953,13 +649,7 @@ function PedidoView() {
               </div>
             )}
 
-            {paymentsDisabled && !isApproved && (
-              <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center text-xs text-yellow-400">
-                Los pagos están temporalmente deshabilitados. Tu pedido y tus diseños siguen accesibles.
-              </div>
-            )}
-
-            {showLegalPrompt && !paymentsDisabled && (
+            {showLegalPrompt && (
               <LegalAcceptanceCard
                 available={legalAvailable}
                 checked={legalChecked}
@@ -983,88 +673,23 @@ function PedidoView() {
               </div>
             )}
 
-            {brickStatus === "loading" && !brickInit && canRetry && (
-              <div className="grid place-items-center py-6 text-xs text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <p className="mt-2">Cargando medio de pago…</p>
-              </div>
-            )}
-
-            {showBrickCheckout && brickInit && (
-              <div className="relative rounded-2xl border border-neon-blue/40 bg-neon-blue/10 p-5">
-                <div className="mb-4 text-center">
-                  <div className="text-sm font-semibold text-foreground">
-                    Pago seguro con Mercado Pago
-                  </div>
+            {canRetry && !order.hasActiveAttempt && !preparingRetry && (
+              <div className="rounded-2xl border border-neon-blue/40 bg-neon-blue/10 p-5">
+                <div className="text-center">
+                  <div className="text-sm font-semibold text-foreground">Pago seguro con Mercado Pago</div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Paga con tarjeta de crédito, débito o prepago sin salir de VisualSkin.
+                    Serás dirigido a Mercado Pago para completar el pago de forma segura.
                   </p>
                 </div>
-
-                <Suspense
-                  fallback={
-                    <div className="grid place-items-center py-6 text-xs text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <p className="mt-2">Cargando medio de pago…</p>
-                    </div>
-                  }
-                >
-                  <div
-                    className={brickInteractionDisabled ? "pointer-events-none opacity-60" : undefined}
-                    aria-busy={brickInteractionDisabled}
-                  >
-                    <MercadoPagoCardCheckout
-                      publicKey={brickInit.publicKey}
-                      orderId={order.id}
-                      amount={brickInit.amount}
-                      email={brickInit.payerEmail}
-                      onReady={handleBrickReady}
-                      onMounted={handleBrickMounted}
-                      onSlowReady={handleBrickSlowReady}
-                      onError={handleBrickError}
-                      onSubmit={handleBrickSubmit}
-                      onDiagnostic={handleBrickDiagnostic}
-                    />
-                  </div>
-                </Suspense>
-
-                {processing && (
-                  <div className="absolute inset-0 grid place-items-center rounded-2xl bg-background/75">
-                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Procesando pago...
-                    </div>
-                  </div>
-                )}
-                {brickSlow && brickStatus !== "ready" && (
-                  <p className="mt-3 text-center text-xs text-yellow-400">
-                    El formulario está tardando más de lo esperado.
-                  </p>
-                )}
-                {payError && (
-                  <p className="mt-3 text-center text-xs text-destructive">{payError}</p>
-                )}
-                <p className="mt-3 text-center text-[10px] text-muted-foreground">
-                  VisualSkin no almacena los datos de tu tarjeta.
-                </p>
+                {payError && <p className="mt-4 text-center text-xs text-destructive">{payError}</p>}
+                <button type="button" disabled={processing}
+                  onClick={() => void handleMercadoPagoCheckout()}
+                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-6 py-3 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">
+                  {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                  {processing ? "Abriendo Mercado Pago…" : "Pagar con Mercado Pago"}
+                </button>
               </div>
             )}
-
-            {brickStatus === "error" && (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center text-xs text-destructive">
-                <p>{brickError ?? "No pudimos cargar el formulario de tarjeta."}</p>
-                {diagnosticEnabled && (brickDiagnostic || cspViolations.length > 0) && (
-                  <button
-                    type="button"
-                    onClick={copyDiagnostic}
-                    className="mt-3 rounded-md border border-destructive/50 px-3 py-1.5"
-                  >
-                    {copyStatus === "copied" ? "Copiado" : "Copiar diagnóstico"}
-                  </button>
-                )}
-              </div>
-            )}
-
             {/* Shopify remains intact as a temporary fallback, hidden in Phase 1
                 so the customer can never see two actions capable of charging. */}
             {SHOW_SHOPIFY_FALLBACK && legalAccepted && !isApproved && !isFinalNoRetry && (
