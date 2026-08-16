@@ -10,6 +10,8 @@ export type RateLimitScope =
   | "finalize_design"
   | "mark_failed"
   | "process_payment"
+  | "checkout_pro_preference"
+  | "checkout_pro_return"
   | "recovery_request"
   | "recovery_consume"
   | "order_read"
@@ -152,6 +154,8 @@ export const RATE_LIMITS = {
   finalize_design:   { limit: 10, window: 60 * 60 },        // 10 / hour / order
   mark_failed:       { limit: 10, window: 60 * 60 },
   process_payment:   { limit: 6,  window: 60 * 60 },        //  6 / hour / order
+  checkout_pro_preference: { limit: 6, window: 60 * 60 },   //  6 / hour / order
+  checkout_pro_return: { limit: 20, window: 60 * 60 },      // return retries / order
   recovery_request_email: { limit: 5,  window: 60 * 60 },   //  5 / hour / email
   recovery_request_ip:    { limit: 10, window: 60 * 60 },   // 10 / hour / ip
   recovery_consume:  { limit: 20, window: 60 * 60 },

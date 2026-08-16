@@ -295,11 +295,12 @@ type TransientTag =
   | "mp_network"
   | "mp_http"
   | "mp_invalid_json"
-  | "unsupported_status"
   | "missing_order_reference"
   | "invalid_order_reference"
+  | "order_lookup"
+  | "order_validation"
   | "attempts_lookup"
-  | "missing_attempt"
+  | "attach_attempt"
   | "apply_rpc"
   | "apply_unexpected"
   | "payment_id_mismatch"
@@ -502,7 +503,31 @@ async function processPayment(
       return "transient";
     }
 
-    // 4) Resolve attemptId: metadata first, else safe lookup.
+    // Validate the provider response against the canonical order before an
+    // attempt can be associated.
+    let orderRows: Array<{ id: string; total_amount: number; currency: string;
+      payment_environment: string; is_live_mode: boolean; payment_status: string }> = [];
+    try {
+      const orderRes = await sbFetch(cfg,
+        `/rest/v1/custom_orders?select=id,total_amount,currency,payment_environment,is_live_mode,payment_status&id=eq.${orderId}&limit=1`);
+      if (!orderRes.ok) throw new Error("order_lookup_failed");
+      orderRows = await orderRes.json();
+    } catch {
+      await markEventTransient(cfg, eventId, "order_lookup");
+      return "transient";
+    }
+    const order = orderRows[0];
+    if (!order || externalReference !== order.id || metadataOrderId !== order.id ||
+        transactionAmount !== Number(order.total_amount) || currencyId !== "CLP" ||
+        order.currency !== "CLP" || liveMode !== order.is_live_mode ||
+        order.payment_environment !== cfg.env ||
+        (cfg.collectorId !== null && collectorId !== cfg.collectorId)) {
+      await markEventTransient(cfg, eventId, "order_validation");
+      return "transient";
+    }
+
+    // Resolve direct-card attempt first. Checkout Pro has none before a real
+    // provider payment, so it is attached atomically by payment id below.
     let attemptId: string | null = null;
     if (metadataAttemptId && UUID_RE.test(metadataAttemptId)) {
       attemptId = metadataAttemptId;
@@ -511,7 +536,7 @@ async function processPayment(
       try {
         q = await sbFetch(
           cfg,
-          `/rest/v1/payment_attempts?select=id,status,created_at&order_id=eq.${orderId}&or=(mercado_pago_payment_id.eq.${paymentId},status.in.(processing,pending,awaiting_reconciliation))&order=created_at.desc&limit=1`,
+          `/rest/v1/payment_attempts?select=id,status,created_at&order_id=eq.${orderId}&mercado_pago_payment_id=eq.${paymentId}&limit=1`,
         );
       } catch {
         await markEventTransient(cfg, eventId, "attempts_lookup");
@@ -533,49 +558,27 @@ async function processPayment(
       }
     }
     if (!attemptId) {
-      await markEventTransient(cfg, eventId, "missing_attempt");
-      return "transient";
-    }
-
-    // 5) Refunded / charged_back → legacy RPC (canonical RPC does not support them).
-    if (mpStatus === "refunded" || mpStatus === "charged_back") {
-      const legacyMapped = mapStatus(mpStatus);
-      if (!legacyMapped) {
-        await markEventTransient(cfg, eventId, "unsupported_status");
-        return "transient";
-      }
-      let applied: unknown;
+      let attached: unknown;
       try {
-        applied = await sbRpc(cfg, "apply_mercado_pago_webhook", {
-          p_event_id: eventId,
-          p_order_id: orderId,
-          p_attempt_id: attemptId,
-          p_mp_payment_id: canonicalPaymentId,
-          p_new_status: legacyMapped,
-          p_status_detail: statusDetail ?? "",
-          p_processing_result: `mp:${mpStatus}`,
-          p_payload: _rawPayload ?? {},
+        attached = await sbRpc(cfg, "attach_mercado_pago_checkout_pro_attempt", {
+          p_order_id: orderId, p_payment_id: canonicalPaymentId,
+          p_payment_environment: cfg.env, p_is_live_mode: liveMode,
         });
       } catch {
-        await markEventTransient(cfg, eventId, "apply_rpc");
+        await markEventTransient(cfg, eventId, "attach_attempt");
         return "transient";
       }
-      if (
-        !applied ||
-        typeof applied !== "object" ||
-        (applied as any).ok !== true ||
-        typeof (applied as any).applied_transition !== "boolean" ||
-        typeof (applied as any).from !== "string" ||
-        typeof (applied as any).to !== "string"
-      ) {
-        await markEventTransient(cfg, eventId, "apply_unexpected");
+      if (!attached || typeof attached !== "object" || (attached as any).ok !== true ||
+          typeof (attached as any).attempt_id !== "string" ||
+          !UUID_RE.test((attached as any).attempt_id)) {
+        await markEventTransient(cfg, eventId, "attach_attempt");
         return "transient";
       }
-      // Legacy RPC already atomically closes payment_events.
-      return "applied";
+      attemptId = (attached as any).attempt_id;
     }
 
-    // 6) Canonical branch — all other statuses.
+    // Canonical branch for every supported payment status, including refunds
+    // and chargebacks. The caller closes payment_events after the RPC result.
     let applied: unknown;
     try {
       applied = await sbRpc(cfg, "apply_mercado_pago_payment_response", {

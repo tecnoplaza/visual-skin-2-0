@@ -50,7 +50,9 @@ export function assertSameOrigin(): void {
   const refererHeader = extractOrigin(req.headers.get("referer"));
   const seen = originHeader ?? refererHeader;
   if (!seen) throw new Error("CSRF: origin ausente");
-  if (!allowed.includes(seen)) throw new Error("CSRF: origen no autorizado");
+  if (!allowed.includes(seen)) {
+    throw new Error("CSRF: origen no autorizado");
+  }
 
   const ct = (req.headers.get("content-type") ?? "").toLowerCase();
   if (!ct.startsWith("application/json")) {
