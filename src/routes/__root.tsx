@@ -14,6 +14,51 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Header } from "../components/site/Header";
 import { Footer } from "../components/site/Footer";
 import { Toaster } from "@/components/ui/sonner";
+import { useVisualContent } from "@/lib/cms";
+
+const FALLBACK_FAVICON = "/favicon.ico";
+
+function DynamicFavicon() {
+  const { data: visual } = useVisualContent();
+  const faviconUrl = visual?.favicon_url?.trim() || FALLBACK_FAVICON;
+
+  useEffect(() => {
+    let favicon = document.head.querySelector<HTMLLinkElement>(
+      'link[data-visualskin-favicon="true"]',
+    );
+
+    if (!favicon) {
+      favicon = Array.from(
+        document.head.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]'),
+      ).find((link) => link.getAttribute("href") === FALLBACK_FAVICON) ?? null;
+    }
+
+    if (!favicon) {
+      favicon = document.createElement("link");
+      favicon.rel = "icon";
+      document.head.appendChild(favicon);
+    }
+
+    favicon.dataset.visualskinFavicon = "true";
+    favicon.href = faviconUrl;
+
+    if (faviconUrl === FALLBACK_FAVICON) {
+      favicon.type = "image/x-icon";
+      return;
+    }
+
+    favicon.removeAttribute("type");
+    const handleError = () => {
+      favicon.href = FALLBACK_FAVICON;
+      favicon.type = "image/x-icon";
+    };
+    favicon.addEventListener("error", handleError, { once: true });
+
+    return () => favicon.removeEventListener("error", handleError);
+  }, [faviconUrl]);
+
+  return null;
+}
 
 function NotFoundComponent() {
   return (
@@ -125,6 +170,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <DynamicFavicon />
       <Header />
       <main className="min-h-[calc(100vh-4rem)]">
         <Outlet />

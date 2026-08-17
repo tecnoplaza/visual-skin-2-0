@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu, X, ShoppingBag, Sparkles } from "lucide-react";
+import { useVisualContent } from "@/lib/cms";
 
 const nav = [
   { to: "/", label: "Inicio" },
@@ -13,14 +14,35 @@ const nav = [
 
 export function Header() {
   const [open, setOpen] = useState(false);
+  const { data: visual } = useVisualContent();
+  const logoUrl = visual?.logo_url?.trim() ?? "";
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [logoUrl]);
+
+  const showCustomLogo = Boolean(logoUrl) && !logoFailed;
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4">
         <Link to="/" className="flex items-center gap-2 font-display text-lg font-bold">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-neon-blue to-neon-green text-background">
-            <Sparkles className="h-4 w-4" />
-          </span>
-          <span>VISUAL<span className="text-gradient-neon">SKIN</span></span>
+          {showCustomLogo ? (
+            <img
+              src={logoUrl}
+              alt="VISUALSKIN"
+              className="max-h-11 w-auto max-w-[160px] object-contain sm:max-w-[200px]"
+              onError={() => setLogoFailed(true)}
+            />
+          ) : (
+            <>
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-neon-blue to-neon-green text-background">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <span>VISUAL<span className="text-gradient-neon">SKIN</span></span>
+            </>
+          )}
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex">
