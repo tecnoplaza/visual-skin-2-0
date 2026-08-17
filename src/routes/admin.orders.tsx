@@ -1,8 +1,12 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Search, ShieldAlert } from "lucide-react";
+import { Loader2, Search, ShieldAlert, Trash2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { adminListOrders } from "@/lib/orders.functions";
+import {
+  adminListOrders,
+  adminDeleteOrders,
+  adminCleanupStaleUnpaidOrders,
+} from "@/lib/orders.functions";
 import { toast } from "sonner";
 import { productionDisplayLabel } from "@/lib/production-display";
 
@@ -11,7 +15,7 @@ export const Route = createFileRoute("/admin/orders")({
   head: () => ({
     meta: [
       { title: "Pedidos — Admin VISUALSKIN" },
-      { name: "robots", content: "noindex" },
+      { name: "robots", content: "noindex,nofollow" },
     ],
   }),
 });
@@ -55,12 +59,17 @@ type Row = {
   created_at: string;
 };
 
+const PROTECTED_PAYMENT_STATUSES = new Set(["approved", "refunded", "charged_back"]);
+
 function OrdersList() {
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [f, setF] = useState({
     qNumber: "",
     qName: "",
@@ -90,18 +99,104 @@ function OrdersList() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    setSelected((prev) => {
+      const visibleIds = new Set(rows.map((r) => r.id));
+      return new Set([...prev].filter((id) => visibleIds.has(id)));
+    });
+  }, [rows]);
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const selectableRows = rows.filter((r) => !PROTECTED_PAYMENT_STATUSES.has(r.payment_status));
+  const allSelectableSelected =
+    selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.id));
+
+  const toggleRow = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const togglePage = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelectableSelected) {
+        for (const r of selectableRows) next.delete(r.id);
+      } else {
+        for (const r of selectableRows) next.add(r.id);
+      }
+      return next;
+    });
+  };
+
+  const deleteSelected = async () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+
+    const ok = window.confirm(
+      `Se eliminarán ${ids.length} pedido(s) NO PAGADO(S), sus registros asociados y sus archivos originales del storage.\n\nLos pedidos pagados/aprobados, reembolsados o con contracargo están protegidos y no pueden borrarse.\n\n¿Continuar?`,
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const r = await adminDeleteOrders({ data: { orderIds: ids } });
+      setSelected(new Set());
+      toast.success(
+        `${r.deletedOrders} pedido(s) eliminado(s). ${r.deletedStorageObjects} archivo(s) borrado(s) del storage.`,
+      );
+      await load();
+    } catch (e: any) {
+      toast.error(e.message ?? "No se pudieron eliminar los pedidos");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cleanupStale = async () => {
+    const ok = window.confirm(
+      "Esto eliminará pedidos NO PAGADOS con más de 72 horas y sus archivos originales. Los pedidos aprobados, reembolsados o con contracargo no se tocarán.\n\n¿Continuar?",
+    );
+    if (!ok) return;
+
+    setCleanupBusy(true);
+    try {
+      const r = await adminCleanupStaleUnpaidOrders();
+      toast.success(
+        `${r.deletedOrders} pedido(s) antiguos eliminado(s). ${r.deletedStorageObjects} archivo(s) borrado(s) del storage.`,
+      );
+      setSelected(new Set());
+      await load();
+    } catch (e: any) {
+      toast.error(e.message ?? "No se pudo ejecutar la limpieza");
+    } finally {
+      setCleanupBusy(false);
+    }
+  };
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-bold">Pedidos</h1>
-        <Link
-          to="/admin"
-          className="rounded-lg border border-border px-3 py-2 text-sm hover:border-neon-blue"
-        >
-          Volver al panel
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={cleanupStale}
+            disabled={cleanupBusy || deleting}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-3 py-2 text-sm text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+          >
+            {cleanupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Limpiar no pagados +72 h
+          </button>
+          <Link
+            to="/admin"
+            className="rounded-lg border border-border px-3 py-2 text-sm hover:border-neon-blue"
+          >
+            Volver al panel
+          </Link>
+        </div>
       </div>
 
       <div className="mb-4 grid gap-2 md:grid-cols-3 lg:grid-cols-5">
@@ -122,6 +217,20 @@ function OrdersList() {
         </button>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
+        <div className="text-muted-foreground">
+          {selected.size} seleccionado(s). Los pedidos pagados/reembolsados/contracargados no son seleccionables.
+        </div>
+        <button
+          onClick={deleteSelected}
+          disabled={selected.size === 0 || deleting || cleanupBusy}
+          className="inline-flex items-center gap-2 rounded border border-destructive/50 px-3 py-1.5 text-destructive hover:bg-destructive/10 disabled:opacity-40"
+        >
+          {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+          Eliminar seleccionados
+        </button>
+      </div>
+
       {loading ? (
         <Loader2 className="h-6 w-6 animate-spin" />
       ) : (
@@ -129,6 +238,15 @@ function OrdersList() {
           <table className="w-full text-sm">
             <thead className="bg-secondary/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
+                <th className="p-3">
+                  <input
+                    type="checkbox"
+                    checked={allSelectableSelected}
+                    onChange={togglePage}
+                    disabled={selectableRows.length === 0}
+                    aria-label="Seleccionar pedidos no pagados de esta página"
+                  />
+                </th>
                 <th className="p-3">Fecha</th>
                 <th className="p-3">Pedido</th>
                 <th className="p-3">Cliente</th>
@@ -141,8 +259,20 @@ function OrdersList() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t border-border">
+              {rows.map((r) => {
+                const protectedOrder = PROTECTED_PAYMENT_STATUSES.has(r.payment_status);
+                return (
+                  <tr key={r.id} className="border-t border-border">
+                    <td className="p-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleRow(r.id)}
+                        disabled={protectedOrder}
+                        aria-label={`Seleccionar ${r.order_number ?? r.id}`}
+                        title={protectedOrder ? "Pedido protegido por su estado de pago" : "Seleccionar pedido"}
+                      />
+                    </td>
                   <td className="p-3 text-xs text-muted-foreground">
                     {new Date(r.created_at).toLocaleDateString("es-CL")}
                   </td>
@@ -155,7 +285,12 @@ function OrdersList() {
                     )}
                   </td>
                   <td className="p-3 font-mono">${r.total_amount.toLocaleString("es-CL")}</td>
-                  <td className="p-3 text-xs">{r.payment_status}</td>
+                    <td className="p-3 text-xs">
+                      {r.payment_status}
+                      {protectedOrder && (
+                        <div className="mt-1 text-[10px] text-neon-green">protegido</div>
+                      )}
+                    </td>
                   <td className="p-3 text-xs">{productionDisplayLabel(r.payment_status, r.fulfillment_status)}</td>
                   <td className="p-3 text-xs">{r.design_status}</td>
                   <td className="p-3 text-xs">
@@ -179,11 +314,12 @@ function OrdersList() {
                       Ver
                     </Link>
                   </td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="p-10 text-center text-xs text-muted-foreground">
+                  <td colSpan={10} className="p-10 text-center text-xs text-muted-foreground">
                     Sin resultados
                   </td>
                 </tr>

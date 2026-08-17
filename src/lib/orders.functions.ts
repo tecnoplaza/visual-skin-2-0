@@ -2734,6 +2734,92 @@ export const adminDownloadProductionFile = createServerFn({ method: "POST" })
   });
 
 // ------------------------------------------------------------------
+// Admin delete/cleanup for unpaid orders.
+// DB deletion is delegated to a transaction-safe RPC. Storage objects
+// are removed only AFTER the DB transaction succeeds.
+// Protected payment statuses can never be deleted.
+// ------------------------------------------------------------------
+
+const AdminDeleteOrdersInput = z.object({
+  orderIds: z.array(z.string().uuid()).min(1).max(100),
+});
+
+async function deleteOrderStorageObjects(paths: string[]): Promise<number> {
+  const uniquePaths = [...new Set(paths.filter(Boolean))];
+  if (uniquePaths.length === 0) return 0;
+
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await (supabaseAdmin.storage as any)
+    .from(DESIGN_BUCKET)
+    .remove(uniquePaths);
+
+  if (error) {
+    throw new Error(`Pedidos eliminados, pero falló la limpieza del storage: ${error.message}`);
+  }
+
+  return uniquePaths.length;
+}
+
+export const adminDeleteOrders = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminDeleteOrdersInput.parse(i))
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await (supabaseAdmin as any).rpc(
+      "admin_delete_unpaid_orders",
+      { p_order_ids: data.orderIds },
+    );
+    if (error) throw new Error(error.message);
+
+    const rows = (result ?? []) as Array<{ storage_path: string | null }>;
+    const storagePaths = rows
+      .map((r) => r.storage_path)
+      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const deletedStorageObjects = await deleteOrderStorageObjects(storagePaths);
+
+    return { deletedOrders: data.orderIds.length, deletedStorageObjects };
+  });
+
+export const adminCleanupStaleUnpaidOrders = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+    const { data: stale, error: staleErr } = await supabaseAdmin
+      .from("custom_orders")
+      .select("id")
+      .lt("created_at", cutoff)
+      .in("payment_status", ["pending", "rejected", "cancelled"])
+      .limit(100);
+    if (staleErr) throw new Error(staleErr.message);
+
+    const orderIds = (stale ?? []).map((r: any) => r.id as string);
+    if (orderIds.length === 0) {
+      return { deletedOrders: 0, deletedStorageObjects: 0 };
+    }
+
+    const { data: result, error } = await (supabaseAdmin as any).rpc(
+      "admin_delete_unpaid_orders",
+      { p_order_ids: orderIds },
+    );
+    if (error) throw new Error(error.message);
+
+    const rows = (result ?? []) as Array<{ storage_path: string | null }>;
+    const storagePaths = rows
+      .map((r) => r.storage_path)
+      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const deletedStorageObjects = await deleteOrderStorageObjects(storagePaths);
+
+    return { deletedOrders: orderIds.length, deletedStorageObjects };
+  });
+
+// ------------------------------------------------------------------
 // §6 Admin diagnostics — returns ONLY booleans + the env label.
 // Never returns secret values, hashes, tokens, or URLs.
 // ------------------------------------------------------------------

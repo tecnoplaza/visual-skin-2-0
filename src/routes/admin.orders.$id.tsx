@@ -18,7 +18,7 @@ export const Route = createFileRoute("/admin/orders/$id")({
   head: () => ({
     meta: [
       { title: "Pedido — Admin VISUALSKIN" },
-      { name: "robots", content: "noindex" },
+      { name: "robots", content: "noindex,nofollow" },
     ],
   }),
 });
@@ -48,6 +48,13 @@ const FULFILLMENT_OPTIONS = [
   "new", "in_production", "ready", "shipped", "completed", "cancelled",
 ] as const;
 
+function originalLabel(kind: string) {
+  if (kind === "case") return "Carcasa";
+  if (kind === "garment") return "Prenda";
+  if (kind === "secondary_garment") return "Prenda secundaria";
+  return kind || "Archivo";
+}
+
 function Detail({ id }: { id: string }) {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +81,25 @@ function Detail({ id }: { id: string }) {
     try {
       const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, path } });
       window.open(r.url, "_blank", "noopener,noreferrer");
+    } catch (e: any) {
+      toast.error(e.message ?? "Error");
+    }
+  };
+
+  const downloadOriginal = async (path: string) => {
+    try {
+      const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, path } });
+      const res = await fetch(r.url);
+      if (!res.ok) throw new Error(`No se pudo descargar el original (${res.status})`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = path.split("/").pop() ?? "archivo-original";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
     } catch (e: any) {
       toast.error(e.message ?? "Error");
     }
@@ -147,6 +173,7 @@ function Detail({ id }: { id: string }) {
 
   const o = data.order;
   const snap = o.catalog_snapshot ?? {};
+  const originalsAvailable = o.payment_status === "approved";
 
   return (
     <section className="mx-auto max-w-6xl px-4 py-8 space-y-6">
@@ -165,8 +192,8 @@ function Detail({ id }: { id: string }) {
       </div>
 
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200/90">
-        El pago, el monto y los IDs de Mercado Pago no pueden modificarse desde aquí.
-        Solo se ajusta el estado de <b>producción</b> y se descargan archivos con URLs firmadas.
+        El pago, el monto y los IDs del proveedor de pago no pueden modificarse desde aquí.
+        La descarga permanente de originales se habilita únicamente para pedidos pagados.
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -293,16 +320,22 @@ function Detail({ id }: { id: string }) {
         )}
       </Card>
 
-      <Card title="Archivos de diseño (URL firmada temporal)">
+      <Card title="Archivos originales del cliente">
+        {!originalsAvailable && (
+          <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200/90">
+            Pedido no pagado: los originales se conservan temporalmente y pueden limpiarse después de 72 horas.
+            La descarga administrativa se habilita cuando el pago está aprobado.
+          </div>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           {data.designAssets.map((a: any) => (
             <div key={a.id} className="rounded border border-border p-3 text-xs">
-              <div className="font-mono text-[10px] text-muted-foreground">{a.file_path}</div>
+              <div className="font-semibold">{originalLabel(a.kind)}</div>
+              <div className="mt-1 font-mono text-[10px] text-muted-foreground">{a.file_path}</div>
               <div className="mt-1">
-                Tipo: <b>{a.kind}</b> · Formato: {a.detected_format ?? "?"} ·{" "}
-                {a.width ?? "?"}×{a.height ?? "?"} px
+                Formato: {a.detected_format ?? "?"} · {a.width ?? "?"}×{a.height ?? "?"} px
               </div>
-              <div className="mt-2 flex gap-2">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   onClick={() => openSigned(a.file_path)}
                   className="rounded border border-border px-3 py-1 text-xs hover:border-neon-blue"
@@ -310,18 +343,35 @@ function Detail({ id }: { id: string }) {
                   Ver
                 </button>
                 <button
-                  onClick={() => downloadProduction(a.file_path)}
-                  className="inline-flex items-center gap-1 rounded border border-border px-3 py-1 text-xs hover:border-neon-green"
+                  onClick={() => downloadOriginal(a.file_path)}
+                  disabled={!originalsAvailable}
+                  className="inline-flex items-center gap-1 rounded border border-border px-3 py-1 text-xs hover:border-neon-green disabled:cursor-not-allowed disabled:opacity-40"
+                  title={originalsAvailable ? "Descargar archivo original" : "Disponible al aprobarse el pago"}
                 >
-                  <Download className="h-3 w-3" /> Descargar
+                  <Download className="h-3 w-3" /> Descargar original
                 </button>
               </div>
             </div>
           ))}
           {data.designAssets.length === 0 && (
-            <div className="text-xs text-muted-foreground">Sin archivos adjuntos.</div>
+            <div className="text-xs text-muted-foreground">Sin archivos originales adjuntos.</div>
           )}
         </div>
+      </Card>
+
+      <Card title="Archivo de producción">
+        <div className="text-xs text-muted-foreground">
+          El archivo print-ready es independiente del original del cliente y del mockup.
+          La generación automática todavía no está implementada.
+        </div>
+        {data.designAssets.length > 0 && (
+          <button
+            onClick={() => downloadProduction(data.designAssets[0].file_path)}
+            className="mt-2 inline-flex items-center gap-1 rounded border border-border px-3 py-1 text-xs hover:border-neon-green"
+          >
+            <Download className="h-3 w-3" /> Consultar archivo de producción
+          </button>
+        )}
       </Card>
 
       <Card title="Intentos de pago">
@@ -450,4 +500,3 @@ function LegalAcceptanceBlock({ order }: { order: any }) {
     </div>
   );
 }
-
