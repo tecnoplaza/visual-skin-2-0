@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
 import { Loader2, Search, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -18,6 +18,7 @@ export const Route = createFileRoute("/admin/orders")({
 
 function AdminOrdersRoute() {
   const { user, isAdmin, loading } = useAuth();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   if (loading) {
     return (
       <div className="grid min-h-[60vh] place-items-center">
@@ -36,7 +37,7 @@ function AdminOrdersRoute() {
       </div>
     );
   }
-  return <OrdersList />;
+  return pathname === "/admin/orders" ? <OrdersList /> : <Outlet />;
 }
 
 type Row = {

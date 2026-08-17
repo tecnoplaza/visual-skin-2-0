@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, useCallback, FormEvent } from "react";
 import {
   Lock, LogOut, Package, ShoppingBag, Layers, Shirt, Image as ImageIcon,
@@ -44,10 +44,11 @@ export const Route = createFileRoute("/admin")({
 
 function AdminGate() {
   const { user, isAdmin, loading } = useAuth();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   if (loading) return <Center><Loader2 className="h-6 w-6 animate-spin text-neon-blue" /></Center>;
   if (!user) return <Login />;
   if (!isAdmin) return <NotAdmin />;
-  return <AdminPanel />;
+  return pathname === "/admin" ? <AdminPanel /> : <Outlet />;
 }
 
 function Center({ children }: { children: React.ReactNode }) {
