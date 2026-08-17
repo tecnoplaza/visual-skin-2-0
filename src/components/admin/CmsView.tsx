@@ -184,32 +184,90 @@ function HomeEditor() {
 // ---------- PACKS ----------
 function PacksEditor() {
   const [rows, setRows] = useState<PromoPack[]>([]);
+  const [savedRows, setSavedRows] = useState<Record<string, string>>({});
+  const [savingIds, setSavingIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const qc = useQueryClient();
+
+  const editablePayload = (row: PromoPack) => ({
+    name: row.name,
+    description: row.description,
+    pack_type: row.pack_type,
+    price: row.price,
+    sale_price: row.sale_price,
+    tag: row.tag,
+    sort_order: row.sort_order,
+    button_label: row.button_label,
+    includes: row.includes,
+    features: row.features,
+    image_url: row.image_url,
+    is_active: row.is_active,
+  });
+  const rowSignature = (row: PromoPack) => JSON.stringify(editablePayload(row));
+
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from("promo_packs").select("*").order("sort_order");
-    if (error) toast.error(error.message); else setRows((data ?? []) as PromoPack[]);
+    if (error) {
+      toast.error(error.message);
+    } else {
+      const loadedRows = (data ?? []) as PromoPack[];
+      setRows(loadedRows);
+      setSavedRows(Object.fromEntries(loadedRows.map((row) => [row.id, rowSignature(row)])));
+    }
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
-  const refresh = () => { load(); qc.invalidateQueries({ queryKey: ["cms", "promo_packs"] }); };
+  const invalidatePacks = () => qc.invalidateQueries({ queryKey: ["cms", "promo_packs"] });
 
   const addNew = async () => {
     const { data, error } = await supabase.from("promo_packs").insert({ name: "Nuevo pack", sort_order: rows.length }).select().single();
     if (error) return toast.error(error.message);
-    setRows([...rows, data as PromoPack]); refresh();
+    const newRow = data as PromoPack;
+    setRows((prev) => [...prev, newRow]);
+    setSavedRows((prev) => ({ ...prev, [newRow.id]: rowSignature(newRow) }));
+    invalidatePacks();
   };
-  const update = async (id: string, patch: Partial<PromoPack>) => {
-    setRows(rows.map((r) => r.id === id ? { ...r, ...patch } : r));
-    const { error } = await supabase.from("promo_packs").update(patch as any).eq("id", id);
-    if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["cms", "promo_packs"] });
+  const editRow = (id: string, patch: Partial<PromoPack>) => {
+    setRows((prev) => prev.map((row) => row.id === id ? { ...row, ...patch } : row));
+  };
+  const saveRow = async (id: string) => {
+    const row = rows.find((candidate) => candidate.id === id);
+    if (!row || savedRows[id] === rowSignature(row)) return;
+
+    const payload = editablePayload(row);
+    const savedSignature = JSON.stringify(payload);
+    setSavingIds((prev) => new Set(prev).add(id));
+    try {
+      const { error } = await supabase.from("promo_packs").update(payload).eq("id", id);
+      if (error) {
+        toast.error(error.message);
+      } else {
+        setSavedRows((prev) => ({ ...prev, [id]: savedSignature }));
+        invalidatePacks();
+        toast.success("Pack guardado");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el pack");
+    } finally {
+      setSavingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   };
   const remove = async (id: string) => {
     if (!confirm("¿Eliminar pack?")) return;
     const { error } = await supabase.from("promo_packs").delete().eq("id", id);
     if (error) return toast.error(error.message);
-    setRows(rows.filter((r) => r.id !== id)); refresh();
+    setRows((prev) => prev.filter((row) => row.id !== id));
+    setSavedRows((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    invalidatePacks();
   };
 
   if (loading) return <Loader2 className="h-6 w-6 animate-spin text-neon-blue" />;
@@ -221,17 +279,20 @@ function PacksEditor() {
       </div>
       {rows.length === 0 && <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">No hay packs. Ejemplos sugeridos: Pack carcasa + polera, carcasa + polerón, pack pareja, pack familiar.</p>}
       <div className="grid gap-4 md:grid-cols-2">
-        {rows.map((r) => (
+        {rows.map((r) => {
+          const saving = savingIds.has(r.id);
+          const hasChanges = savedRows[r.id] !== rowSignature(r);
+          return (
           <div key={r.id} className="space-y-3 rounded-2xl border border-border bg-card p-4">
             <div className="flex items-start justify-between">
-              <Text value={r.name} onChange={(e) => update(r.id, { name: e.target.value })} className="!text-base font-semibold" />
+              <Text value={r.name} onChange={(e) => editRow(r.id, { name: e.target.value })} className="!text-base font-semibold" />
               <button onClick={() => remove(r.id)} className="ml-2 rounded-lg p-2 text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></button>
             </div>
-            <Area rows={2} placeholder="Descripción" value={r.description ?? ""} onChange={(e) => update(r.id, { description: e.target.value })} />
+            <Area rows={2} placeholder="Descripción" value={r.description ?? ""} onChange={(e) => editRow(r.id, { description: e.target.value })} />
             <Field label="Tipo de pack">
               <select
                 value={r.pack_type}
-                onChange={(e) => update(r.id, { pack_type: e.target.value as PromoPack["pack_type"] })}
+                onChange={(e) => editRow(r.id, { pack_type: e.target.value as PromoPack["pack_type"] })}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
               >
                 <option value="carcasa">Solo Carcasa</option>
@@ -241,25 +302,28 @@ function PacksEditor() {
               </select>
             </Field>
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Precio base"><Text type="number" value={r.price} onChange={(e) => update(r.id, { price: Number(e.target.value) })} /></Field>
-              <Field label="Precio oferta"><Text type="number" value={r.sale_price ?? ""} onChange={(e) => update(r.id, { sale_price: e.target.value === "" ? null : Number(e.target.value) })} /></Field>
-              <Field label="Etiqueta"><Text value={r.tag ?? ""} onChange={(e) => update(r.id, { tag: e.target.value })} /></Field>
-              <Field label="Orden"><Text type="number" value={r.sort_order} onChange={(e) => update(r.id, { sort_order: Number(e.target.value) })} /></Field>
-              <Field label="Texto botón"><Text value={r.button_label ?? ""} onChange={(e) => update(r.id, { button_label: e.target.value })} /></Field>
+              <Field label="Precio base"><Text type="number" value={r.price} onChange={(e) => editRow(r.id, { price: Number(e.target.value) })} /></Field>
+              <Field label="Precio oferta"><Text type="number" value={r.sale_price ?? ""} onChange={(e) => editRow(r.id, { sale_price: e.target.value === "" ? null : Number(e.target.value) })} /></Field>
+              <Field label="Etiqueta"><Text value={r.tag ?? ""} onChange={(e) => editRow(r.id, { tag: e.target.value })} /></Field>
+              <Field label="Orden"><Text type="number" value={r.sort_order} onChange={(e) => editRow(r.id, { sort_order: Number(e.target.value) })} /></Field>
+              <Field label="Texto botón"><Text value={r.button_label ?? ""} onChange={(e) => editRow(r.id, { button_label: e.target.value })} /></Field>
             </div>
             <Field label="Productos incluidos (separados por coma)">
-              <Text value={(r.includes ?? []).join(", ")} onChange={(e) => update(r.id, { includes: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
+              <Text value={(r.includes ?? []).join(", ")} onChange={(e) => editRow(r.id, { includes: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
             </Field>
             <Field label="Características / bullets (separados por coma)">
-              <Text value={(r.features ?? []).join(", ")} onChange={(e) => update(r.id, { features: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
+              <Text value={(r.features ?? []).join(", ")} onChange={(e) => editRow(r.id, { features: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
             </Field>
-            <ImagePicker value={r.image_url ?? ""} onChange={(v) => update(r.id, { image_url: v })} folder="packs" />
+            <ImagePicker value={r.image_url ?? ""} onChange={(v) => editRow(r.id, { image_url: v })} folder="packs" />
             <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={r.is_active} onChange={(e) => update(r.id, { is_active: e.target.checked })} /> Activo (visible al cliente)
+              <input type="checkbox" checked={r.is_active} onChange={(e) => editRow(r.id, { is_active: e.target.checked })} /> Activo (visible al cliente)
             </label>
-
+            <PrimaryBtn busy={saving} disabled={!hasChanges} onClick={() => saveRow(r.id)}>
+              {saving ? "Guardando..." : "Guardar cambios"}
+            </PrimaryBtn>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
