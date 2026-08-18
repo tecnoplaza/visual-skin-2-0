@@ -57,6 +57,22 @@ test("personalizador agrega primer y siguientes productos sin modal informativo"
   assert.match(customizer, /navigate\(\{ to: "\/carrito"/);
 });
 
+test("botones agregar conservan precio dinámico y muestran spinner durante loading", () => {
+  const buttons = customizer.match(/Agregar al carrito · \$\{price\.toLocaleString\("es-CL"\)\}[\s\S]*?showCheckout && <Loader2 className="h-4 w-4 animate-spin" \/>/g) ?? [];
+  assert.equal(buttons.length, 2);
+  assert.match(customizer, /disabled=\{!completeReady \|\| showCheckout\}/);
+  assert.match(customizer, /disabled=\{showCheckout \|\| !caseDesign/);
+  assert.match(customizer, /if \(!showCheckout\) setShowCheckout\(true\)/);
+});
+
+test("error libera loading y éxito lo mantiene hasta navegar al carrito", () => {
+  const submitter = customizer.slice(customizer.indexOf("function CheckoutDialog"));
+  assert.match(submitter, /\.catch\(\(error\) => \{[\s\S]*?onClose\(\)/);
+  const successFlow = customizer.slice(customizer.indexOf("onSubmit={async () =>"), customizer.indexOf("function CheckoutDialog"));
+  assert.match(successFlow, /navigate\(\{ to: "\/carrito"/);
+  assert.doesNotMatch(successFlow, /setShowCheckout\(false\)/);
+});
+
 test("aceptación legal y Checkout Pro ocurren en un único click ordenado", () => {
   const route = orderRoute.slice(
     orderRoute.indexOf("const handleMercadoPagoCheckout"),

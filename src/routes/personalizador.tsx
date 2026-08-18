@@ -453,11 +453,15 @@ function Personalizador() {
                   selectedCompleteShirt.id !== selectedCompleteHoodie.id;
                 return completeActive ? (
                   <button
-                    onClick={() => setShowCheckout(true)}
-                    disabled={!completeReady}
+                    onClick={() => { if (!showCheckout) setShowCheckout(true); }}
+                    disabled={!completeReady || showCheckout}
+                    aria-busy={showCheckout || undefined}
                     className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
                   >
                     Agregar al carrito · ${price.toLocaleString("es-CL")}
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+                      {showCheckout && <Loader2 className="h-4 w-4 animate-spin" />}
+                    </span>
                   </button>
                 ) : (
                   <div className="flex flex-col items-end gap-1">
@@ -475,11 +479,15 @@ function Personalizador() {
               })()
             ) : (
               <button
-                onClick={() => setShowCheckout(true)}
-                disabled={!caseDesign || (hasShirt && (!shirtDesign || !selectedGarment)) || !model}
+                onClick={() => { if (!showCheckout) setShowCheckout(true); }}
+                disabled={showCheckout || !caseDesign || (hasShirt && (!shirtDesign || !selectedGarment)) || !model}
+                aria-busy={showCheckout || undefined}
                 className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
               >
                 Agregar al carrito · ${price.toLocaleString("es-CL")}
+                <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+                  {showCheckout && <Loader2 className="h-4 w-4 animate-spin" />}
+                </span>
               </button>
             )}
           </div>
@@ -596,7 +604,6 @@ function Personalizador() {
                   },
                 });
 
-                setShowCheckout(false);
                 await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
                 navigate({ to: "/carrito", search: { added: true } });
                 return;
@@ -697,7 +704,6 @@ function Personalizador() {
                 },
               });
 
-              setShowCheckout(false);
               await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
               navigate({ to: "/carrito", search: { added: true } });
             }}
