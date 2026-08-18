@@ -178,6 +178,8 @@ type Candidate = {
   status: string;
   payment_environment: string;
   created_at: string;
+  payment_flow?: string;
+  mercadopago_preference_id?: string | null;
 };
 
 // -------------------- Manual body validation --------------------
@@ -251,7 +253,7 @@ async function selectManualCandidate(
   ).toISOString();
   const qs = new URLSearchParams({
     select:
-      "id,order_id,mercado_pago_payment_id,status,payment_environment,created_at",
+      "id,order_id,mercado_pago_payment_id,status,payment_environment,created_at,payment_flow,mercadopago_preference_id",
     id: `eq.${attemptId}`,
     status: "in.(awaiting_reconciliation,processing,pending)",
     payment_environment: `eq.${cfg.env}`,
@@ -314,11 +316,12 @@ async function rpcApply(
   deps: ReconcileDependencies,
   cfg: Extract<Cfg, { ok: true }>,
   args: Record<string, unknown>,
+  checkoutPro = false,
 ): Promise<{ ok: true; body: unknown } | { ok: false; status: number }> {
   const r = await sbFetch(
     deps,
     cfg,
-    `/rest/v1/rpc/apply_mercado_pago_payment_response`,
+    `/rest/v1/rpc/${checkoutPro ? "apply_checkout_pro_snapshot_payment_v1" : "apply_mercado_pago_payment_response"}`,
     { method: "POST", body: JSON.stringify(args) },
   );
   if (!r.ok) return { ok: false, status: r.status };
@@ -473,6 +476,8 @@ async function executeSingle(
     typeof payment.payment_type_id === "string"
       ? payment.payment_type_id
       : null;
+  const preferenceId =
+    typeof payment.preference_id === "string" ? payment.preference_id : null;
 
   const rawCollector = payment.collector_id;
   let collectorId: string | null = null;
@@ -487,10 +492,12 @@ async function executeSingle(
     collectorId = String(rawCollector);
   }
 
+  const isCheckoutPro = candidate.payment_flow === "checkout_pro";
   const applied = await rpcApply(deps, cfg, {
     p_order_id: candidate.order_id,
     p_attempt_id: candidate.id,
     p_payment_id: canonicalPaymentId,
+    ...(isCheckoutPro ? { p_preference_id: preferenceId } : {}),
     p_payment_status: mpStatus,
     p_status_detail: statusDetail,
     p_live_mode: liveMode,
@@ -502,7 +509,7 @@ async function executeSingle(
     p_payment_type_id: paymentTypeId,
     p_collector_id: collectorId,
     p_expected_collector_id: cfg.collectorId,
-  });
+  }, isCheckoutPro);
 
   if (!applied.ok) {
     counters.rpc_failed += 1;

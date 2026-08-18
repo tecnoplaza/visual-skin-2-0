@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as CambiosYDevolucionesRouteImport } from './routes/cambios-y-devoluciones'
+import { Route as CarritoRouteImport } from './routes/carrito'
 import { Route as CatalogoRouteImport } from './routes/catalogo'
 import { Route as ContactoRouteImport } from './routes/contacto'
 import { Route as CrearMiPackRouteImport } from './routes/crear-mi-pack'
@@ -41,6 +42,11 @@ const AdminRoute = AdminRouteImport.update({
 const CambiosYDevolucionesRoute = CambiosYDevolucionesRouteImport.update({
   id: '/cambios-y-devoluciones',
   path: '/cambios-y-devoluciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CarritoRoute = CarritoRouteImport.update({
+  id: '/carrito',
+  path: '/carrito',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CatalogoRoute = CatalogoRouteImport.update({
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
@@ -145,6 +152,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
@@ -166,6 +174,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
@@ -188,6 +197,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
@@ -208,6 +218,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
@@ -228,6 +239,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
@@ -249,6 +261,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
   CambiosYDevolucionesRoute: typeof CambiosYDevolucionesRoute
+  CarritoRoute: typeof CarritoRoute
   CatalogoRoute: typeof CatalogoRoute
   ContactoRoute: typeof ContactoRoute
   CrearMiPackRoute: typeof CrearMiPackRoute
@@ -285,6 +298,13 @@ declare module '@tanstack/react-router' {
       path: '/cambios-y-devoluciones'
       fullPath: '/cambios-y-devoluciones'
       preLoaderRoute: typeof CambiosYDevolucionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/carrito': {
+      id: '/carrito'
+      path: '/carrito'
+      fullPath: '/carrito'
+      preLoaderRoute: typeof CarritoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/catalogo': {
@@ -421,6 +441,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   CambiosYDevolucionesRoute: CambiosYDevolucionesRoute,
+  CarritoRoute: CarritoRoute,
   CatalogoRoute: CatalogoRoute,
   ContactoRoute: ContactoRoute,
   CrearMiPackRoute: CrearMiPackRoute,

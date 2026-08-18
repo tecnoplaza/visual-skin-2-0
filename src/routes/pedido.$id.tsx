@@ -1,5 +1,6 @@
 ﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, AlertTriangle, XCircle, Clock, FileText, ExternalLink, Lock } from "lucide-react";
 import {
   exchangeOrderToken,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { productionDisplayLabel } from "@/lib/production-display";
+import { activeCartItems, activeCartQueryOptions, cartPackLabel } from "@/lib/cart";
 
 // Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
 // implemented below as a temporary fallback and can be re-enabled deliberately.
@@ -106,6 +108,9 @@ function PedidoView() {
   const { id } = Route.useParams();
   const { token, mp_return: mpReturn, payment_id: returnPaymentId } = Route.useSearch();
   const navigate = useNavigate();
+  const { data: activeCart } = useQuery(activeCartQueryOptions());
+  const cartForOrder = activeCart?.order.id === id ? activeCart : null;
+  const cartItems = activeCartItems(cartForOrder);
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -454,6 +459,23 @@ function PedidoView() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-6">
+          {cartItems.length > 0 && (
+            <div className="rounded-2xl border border-border bg-card p-6">
+              <h2 className="font-display text-lg font-semibold">Productos del pedido</h2>
+              <div className="mt-4 space-y-3">
+                {cartItems.map((item, index) => (
+                  <div key={item.id} className="rounded-xl border border-border bg-background p-4 text-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div><p className="text-xs text-muted-foreground">Producto {index + 1}</p><p className="font-semibold">{cartPackLabel(item.pack_type)}</p><p className="text-muted-foreground">{item.brand ? `${item.brand} · ` : ""}{item.phone_model ?? "—"}</p></div>
+                      <strong className="font-mono">${item.line_total.toLocaleString("es-CL")}</strong>
+                    </div>
+                    {item.garment_id && <p className="mt-2 text-xs text-muted-foreground">Prenda {item.garment_size ?? "—"}{item.garment_color ? ` / ${item.garment_color}` : ""}</p>}
+                    {item.secondary_garment_id && <p className="text-xs text-muted-foreground">Segunda prenda {item.secondary_garment_size ?? "—"}{item.secondary_garment_color ? ` / ${item.secondary_garment_color}` : ""}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className={`grid gap-4 ${isCompletePack ? "sm:grid-cols-2 lg:grid-cols-3" : hasShirt ? "sm:grid-cols-2" : ""}`}>
             {order.case_design_url && (
               <figure className="overflow-hidden rounded-2xl border border-border bg-card">

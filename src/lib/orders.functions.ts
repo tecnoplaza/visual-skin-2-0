@@ -33,6 +33,8 @@ import {
   ipHashFromRequest,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
+import type { OrderItem } from "@/lib/order-items";
+import { assertCheckoutEconomy, type CanonicalCheckoutCart, type MercadoPagoLine } from "@/lib/checkout-cart";
 
 // ------------------------------------------------------------------
 // Constants / helpers
@@ -166,6 +168,7 @@ async function validateDesignJson(
   input: unknown,
   expected: {
     orderId: string;
+    orderItemId?: string;
     modelId: string;
     allowGarment: boolean;
     allowSecondaryGarment: boolean;
@@ -201,11 +204,13 @@ async function validateDesignJson(
   if (parsed.secondary_garment?.assetRef) layerRefs.push({ kind: "secondary_garment", ref: parsed.secondary_garment.assetRef });
   if (layerRefs.length > 0) {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: auths } = await supabaseAdmin
+    let authQuery = supabaseAdmin
       .from("order_upload_authorizations")
       .select("storage_path,kind,status,expires_at")
       .eq("order_id", expected.orderId)
       .in("storage_path", layerRefs.map((r) => r.ref));
+    if (expected.orderItemId) authQuery = authQuery.eq("order_item_id", expected.orderItemId);
+    const { data: auths } = await authQuery;
     const now = Date.now();
     for (const r of layerRefs) {
       const row = (auths ?? []).find((a: any) => a.storage_path === r.ref);
@@ -299,7 +304,7 @@ const CustomerSchema = z.object({
   notes: z.string().trim().max(1000).optional().default(""),
 });
 
-const CreateOrderInput = z.object({
+const OrderItemSelectionInput = z.object({
   packId: z.string().uuid().nullable().optional(),
   packType: PackType,
   phoneModelId: z.string().uuid(),
@@ -310,9 +315,158 @@ const CreateOrderInput = z.object({
   secondaryGarmentId: z.string().uuid().nullable().optional(),
   secondaryGarmentSize: z.string().max(20).nullable().optional(),
   secondaryGarmentColor: z.string().max(60).nullable().optional(),
+});
+
+const CreateOrderInput = OrderItemSelectionInput.extend({
   customer: CustomerSchema,
   deliveryMethod: z.enum(["shipping", "pickup"]).default("shipping"),
 });
+
+type OrderItemSelection = z.infer<typeof OrderItemSelectionInput>;
+
+type CanonicalOrderItemPayload = {
+  pack_id: string;
+  pack_type: z.infer<typeof PackType>;
+  brand_id: string;
+  brand: string;
+  phone_model_id: string;
+  phone_model: string;
+  garment_id: string | null;
+  garment_size: string | null;
+  garment_color: string | null;
+  secondary_garment_id: string | null;
+  secondary_garment_size: string | null;
+  secondary_garment_color: string | null;
+  base_price: number;
+  unit_price: number;
+  discount_amount: number;
+  line_total: number;
+  catalog_snapshot: Record<string, unknown>;
+};
+
+function fingerprintOrderItem(payload: CanonicalOrderItemPayload): string {
+  return createHash("sha256").update(canonicalJson(payload), "utf8").digest("hex");
+}
+
+async function resolveCanonicalOrderItem(
+  selection: OrderItemSelection,
+): Promise<CanonicalOrderItemPayload> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { isValidGarmentPrintArea } = await import("@/lib/garment-model");
+
+  let packQuery = supabaseAdmin
+    .from("promo_packs")
+    .select("id,pack_type,price,sale_price,is_active")
+    .eq("is_active", true);
+  packQuery = selection.packId
+    ? packQuery.eq("id", selection.packId)
+    : packQuery.eq("pack_type", selection.packType).order("sort_order").limit(1);
+  const { data: pack } = await packQuery.maybeSingle();
+  if (!pack || pack.pack_type !== selection.packType) throw new Error("Pack no disponible");
+
+  const { data: model } = await supabaseAdmin
+    .from("phone_models")
+    .select("id,name,slug,is_active,mold_status,brand_id,print_area,mockup_url")
+    .eq("id", selection.phoneModelId)
+    .maybeSingle();
+  if (
+    !model || !model.is_active || model.mold_status !== "listo" ||
+    !model.print_area || typeof model.print_area !== "object" || !model.mockup_url
+  ) throw new Error("Modelo no disponible");
+
+  const { data: brand } = await supabaseAdmin
+    .from("brands")
+    .select("id,name,is_active")
+    .eq("id", model.brand_id)
+    .maybeSingle();
+  if (!brand || !brand.is_active) throw new Error("Marca no disponible");
+
+  type Garment = {
+    id: string; type: string; name: string; color: string; sizes: string[];
+    is_active: boolean; mold_status: string; view: string; mockup_url: string | null;
+    base_url: string | null; overlay_url: string | null; preview_url: string | null;
+    print_area: unknown; source_width: number | null; source_height: number | null;
+  };
+  async function garment(
+    id: string,
+    expectedType: "polera" | "poleron",
+    requestedSize: string | null | undefined,
+  ): Promise<{ row: Garment; size: string }> {
+    const { data } = await supabaseAdmin.from("garments")
+      .select("id,type,name,color,sizes,is_active,mold_status,view,mockup_url,base_url,overlay_url,preview_url,print_area,source_width,source_height")
+      .eq("id", id).maybeSingle();
+    const row = data as Garment | null;
+    if (
+      !row || row.type !== expectedType || !row.is_active || row.mold_status !== "listo" ||
+      row.view !== "front" || !row.mockup_url || !isValidGarmentPrintArea(row.print_area)
+    ) throw new Error("Prenda no disponible");
+    const index = row.sizes.map((size) => size.trim().toUpperCase())
+      .indexOf((requestedSize ?? "").trim().toUpperCase());
+    if (index < 0) throw new Error("Talla de prenda inválida");
+    return { row, size: row.sizes[index] };
+  }
+
+  let primary: { row: Garment; size: string } | null = null;
+  let secondary: { row: Garment; size: string } | null = null;
+  if (selection.packType === "carcasa") {
+    if (selection.garmentId || selection.secondaryGarmentId) throw new Error("Este pack no admite prendas");
+  } else if (selection.packType === "carcasa+polera+poleron") {
+    if (!selection.garmentId || !selection.secondaryGarmentId) throw new Error("Faltan prendas del pack");
+    if (selection.garmentId === selection.secondaryGarmentId) throw new Error("Las prendas deben ser diferentes");
+    primary = await garment(selection.garmentId, "polera", selection.garmentSize);
+    secondary = await garment(selection.secondaryGarmentId, "poleron", selection.secondaryGarmentSize);
+  } else {
+    if (!selection.garmentId || selection.secondaryGarmentId) throw new Error("Selección de prendas inválida");
+    primary = await garment(
+      selection.garmentId,
+      selection.packType === "carcasa+polera" ? "polera" : "poleron",
+      selection.garmentSize,
+    );
+  }
+
+  const basePrice = Math.round(Number(pack.price));
+  const effectivePrice = Math.round(Number(pack.sale_price ?? pack.price));
+  if (!Number.isSafeInteger(basePrice) || !Number.isSafeInteger(effectivePrice)
+      || basePrice <= 0 || effectivePrice <= 0 || effectivePrice > basePrice) {
+    throw new Error("Precio canónico inválido");
+  }
+  const discount = Math.max(0, basePrice - effectivePrice);
+  const snapshotGarment = (selected: typeof primary) => selected ? {
+    id: selected.row.id, type: selected.row.type, name: selected.row.name,
+    color: selected.row.color, size: selected.size, view: selected.row.view,
+    print_area: selected.row.print_area, base_url: selected.row.base_url,
+    overlay_url: selected.row.overlay_url, mockup_url: selected.row.mockup_url,
+    preview_url: selected.row.preview_url, source_width: selected.row.source_width,
+    source_height: selected.row.source_height,
+  } : null;
+
+  return {
+    pack_id: pack.id,
+    pack_type: selection.packType,
+    brand_id: brand.id,
+    brand: brand.name,
+    phone_model_id: model.id,
+    phone_model: model.name,
+    garment_id: primary?.row.id ?? null,
+    garment_size: primary?.size ?? null,
+    garment_color: primary?.row.color ?? null,
+    secondary_garment_id: secondary?.row.id ?? null,
+    secondary_garment_size: secondary?.size ?? null,
+    secondary_garment_color: secondary?.row.color ?? null,
+    base_price: basePrice,
+    unit_price: effectivePrice,
+    discount_amount: discount,
+    line_total: effectivePrice,
+    catalog_snapshot: {
+      pack: { id: pack.id, type: pack.pack_type, price: basePrice, sale_price: pack.sale_price },
+      brand: { id: brand.id, name: brand.name },
+      model: { id: model.id, name: model.name, slug: model.slug, mold_status: model.mold_status, print_area: model.print_area },
+      garment: snapshotGarment(primary),
+      secondaryGarment: snapshotGarment(secondary),
+      captured_at: new Date().toISOString(),
+    },
+  };
+}
 
 // ------------------------------------------------------------------
 // createSecureOrder — creates the order and opens the HttpOnly cookie
@@ -545,9 +699,7 @@ export const createSecureOrder = createServerFn({ method: "POST" })
       captured_at: new Date().toISOString(),
     };
 
-    const { data: inserted, error: insErr } = await supabaseAdmin
-      .from("custom_orders")
-      .insert({
+    const orderPayload = {
         order_number: orderNumber,
         public_access_token_hash: tokenHash,
         pack_id: packRow.id,
@@ -586,36 +738,57 @@ export const createSecureOrder = createServerFn({ method: "POST" })
         catalog_snapshot: catalogSnapshot,
         payment_environment: getServerConfig().mpEnv,
         is_live_mode: getServerConfig().isLiveMode,
-      } as any)
-      .select("id,order_number")
-      .single();
+      };
 
-
-    if (insErr || !inserted) {
-      console.error("[createSecureOrder] insert failed", insErr?.message);
-      throw new Error("No se pudo crear el pedido");
-    }
-
+    // Transitional dual-write: legacy product columns remain populated above,
+    // while the first active product is also persisted as order_items position 0.
+    const initialItem: CanonicalOrderItemPayload = {
+      pack_id: packRow.id,
+      pack_type: data.packType,
+      brand_id: brandRow.id,
+      brand: brandRow.name,
+      phone_model_id: model.id,
+      phone_model: model.name,
+      garment_id: garmentRow?.id ?? null,
+      garment_size: garmentRow ? canonicalGarmentSize : null,
+      garment_color: garmentRow?.color ?? null,
+      secondary_garment_id: secondaryGarmentRow?.id ?? null,
+      secondary_garment_size: secondaryGarmentRow ? canonicalSecondarySize : null,
+      secondary_garment_color: secondaryGarmentRow?.color ?? null,
+      base_price: Math.round(basePrice),
+      unit_price: subtotal,
+      discount_amount: discount,
+      line_total: subtotal,
+      catalog_snapshot: catalogSnapshot,
+    };
     const sessionToken = generateOpaqueToken(32);
     const sessionHash = hashToken(sessionToken);
     const csrfToken = generateCsrfToken();
     const csrfHash = hashCsrfToken(csrfToken);
     const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
     const absExp = new Date(Date.now() + SESSION_ABSOLUTE_TTL_SECONDS * 1000);
-    const { data: sessRow, error: sessErr } = await supabaseAdmin
-      .from("payment_sessions")
-      .insert({
-        order_id: inserted.id,
-        session_token_hash: sessionHash,
-        csrf_token_hash: csrfHash,
-        expires_at: expiresAt.toISOString(),
-        absolute_expires_at: absExp.toISOString(),
-      } as any)
-      .select("id")
-      .single();
-    if (sessErr || !sessRow) {
-      console.error("[createSecureOrder] session insert failed", sessErr?.message);
-      throw new Error("No se pudo iniciar la sesión del pedido");
+    const { data: created, error: createError } = await (supabaseAdmin as any).rpc(
+      "create_order_with_first_item_v1",
+      {
+        p_order: orderPayload,
+        p_client_item_key: "initial-order-item",
+        p_request_fingerprint: fingerprintOrderItem(initialItem),
+        p_item: initialItem,
+        p_session_token_hash: sessionHash,
+        p_csrf_token_hash: csrfHash,
+        p_session_expires_at: expiresAt.toISOString(),
+        p_session_absolute_expires_at: absExp.toISOString(),
+      },
+    );
+    const createdRow = created as {
+      order_id?: string;
+      order_number?: string | null;
+      session_id?: string;
+      item?: { id?: string };
+    } | null;
+    if (createError || !createdRow?.order_id || !createdRow.session_id || !createdRow.item?.id) {
+      console.error("[createSecureOrder] atomic create failed", createError?.message);
+      throw new Error("No se pudo crear el pedido");
     }
     setCookie(SESSION_COOKIE, sessionToken, {
       httpOnly: true,
@@ -627,13 +800,14 @@ export const createSecureOrder = createServerFn({ method: "POST" })
 
     const { issueSignedCsrfToken } = await import("@/lib/csrf-signed");
     const signedCsrf = issueSignedCsrfToken(
-      (sessRow as { id: string }).id,
-      inserted.id,
+      createdRow.session_id,
+      createdRow.order_id,
     );
 
     return {
-      id: inserted.id,
-      orderNumber: inserted.order_number,
+      id: createdRow.order_id,
+      orderItemId: createdRow.item.id,
+      orderNumber: createdRow.order_number,
       csrfToken: signedCsrf,
     };
   });
@@ -986,6 +1160,194 @@ export const finalizeOrderDesigns = createServerFn({ method: "POST" })
     return { ok: true as const, lowResolution };
   });
 
+const RequestOrderItemUploadInput = RequestUploadInput.extend({
+  orderItemId: z.string().uuid(),
+});
+
+function assertCanonicalOrderItemDesignPath(
+  path: string,
+  orderId: string,
+  orderItemId: string,
+  kind: DesignKind,
+): void {
+  const pattern = new RegExp(
+    `^${orderId}/${orderItemId}/${kind}-[0-9a-f-]{36}\\.(png|jpg|webp)$`,
+    "i",
+  );
+  if (!pattern.test(path) || path.includes("..") || path.includes("//")) {
+    throw new Error("Ruta de diseño inválida");
+  }
+}
+
+export const requestOrderItemDesignUpload = createServerFn({ method: "POST" })
+  .inputValidator((input) => RequestOrderItemUploadInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceRateLimit(
+      "request_upload",
+      hashBucketKey("request_item_upload", session.orderId, data.orderItemId),
+      RATE_LIMITS.request_upload.limit,
+      RATE_LIMITS.request_upload.window,
+    );
+    if (!DESIGN_ALLOWED_MIME.has(data.contentType)) throw new Error("Tipo de archivo no permitido");
+    await assertDesignMutable(session.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: item } = await supabaseAdmin.from("order_items")
+      .select("id,order_id,pack_type,is_active")
+      .eq("id", data.orderItemId).eq("order_id", session.orderId).maybeSingle();
+    if (!item || !item.is_active) throw new Error("Producto no encontrado");
+    if (data.kind === "garment" && item.pack_type === "carcasa") throw new Error("Este producto no admite prenda");
+    if (data.kind === "secondary_garment" && item.pack_type !== "carcasa+polera+poleron") {
+      throw new Error("Este producto no admite segunda prenda");
+    }
+
+    const ext = DESIGN_EXT[data.contentType]!;
+    const path = `${session.orderId}/${data.orderItemId}/${data.kind}-${randomUUID()}.${ext}`;
+    const { data: authId, error: authError } = await (supabaseAdmin as any).rpc(
+      "issue_order_item_upload_authorization_v1",
+      {
+        p_order_id: session.orderId,
+        p_order_item_id: data.orderItemId,
+        p_session_id: session.sessionId,
+        p_kind: data.kind,
+        p_storage_path: path,
+        p_declared_mime: data.contentType,
+        p_declared_size: data.size,
+        p_ttl_seconds: 30 * 60,
+      },
+    );
+    if (authError || !authId) throw new Error("No se pudo autorizar la subida");
+    const { data: signed, error: signError } = await (supabaseAdmin.storage
+      .from(DESIGN_BUCKET) as any).createSignedUploadUrl(path);
+    if (signError || !signed) throw new Error("No se pudo autorizar la subida");
+
+    return { path: signed.path as string, token: signed.token as string, bucket: DESIGN_BUCKET };
+  });
+
+const FinalizeOrderItemInput = FinalizeInput.extend({
+  orderItemId: z.string().uuid(),
+});
+
+export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
+  .inputValidator((input) => FinalizeOrderItemInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceRateLimit(
+      "finalize_design",
+      hashBucketKey("finalize_item_design", session.orderId, data.orderItemId),
+      RATE_LIMITS.finalize_design.limit,
+      RATE_LIMITS.finalize_design.window,
+    );
+    await assertDesignMutable(session.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: item } = await supabaseAdmin.from("order_items")
+      .select("id,order_id,pack_type,phone_model_id,is_active")
+      .eq("id", data.orderItemId).eq("order_id", session.orderId).maybeSingle();
+    if (!item || !item.is_active) throw new Error("Producto no encontrado");
+    const allowGarment = item.pack_type !== "carcasa";
+    const allowSecondaryGarment = item.pack_type === "carcasa+polera+poleron";
+    assertCanonicalOrderItemDesignPath(data.casePath, session.orderId, data.orderItemId, "case");
+    if (data.garmentPath) assertCanonicalOrderItemDesignPath(data.garmentPath, session.orderId, data.orderItemId, "garment");
+    if (data.secondaryGarmentPath) {
+      assertCanonicalOrderItemDesignPath(data.secondaryGarmentPath, session.orderId, data.orderItemId, "secondary_garment");
+    }
+    if (!allowGarment && data.garmentPath) throw new Error("Este producto no admite prenda");
+    if (allowGarment && !data.garmentPath) throw new Error("Falta el diseño de la prenda");
+    if (!allowSecondaryGarment && data.secondaryGarmentPath) throw new Error("Segunda prenda no permitida");
+    if (allowSecondaryGarment && !data.secondaryGarmentPath) throw new Error("Falta el diseño de la segunda prenda");
+
+    const paths: Array<{ path: string; kind: DesignKind }> = [
+      { path: data.casePath, kind: "case" },
+      ...(data.garmentPath ? [{ path: data.garmentPath, kind: "garment" as const }] : []),
+      ...(data.secondaryGarmentPath ? [{ path: data.secondaryGarmentPath, kind: "secondary_garment" as const }] : []),
+    ];
+    if (new Set(paths.map((entry) => entry.path)).size !== paths.length) throw new Error("Rutas de diseño duplicadas");
+
+    let lowResolution = false;
+    const detected: Record<DesignKind, { width: number; height: number; format: string } | null> = {
+      case: null, garment: null, secondary_garment: null,
+    };
+    try {
+      for (const entry of paths) {
+        const blobResult = await supabaseAdmin.storage.from(DESIGN_BUCKET).download(entry.path);
+        if (blobResult.error || !blobResult.data) throw new Error("Archivo no encontrado en el bucket");
+        const blob = blobResult.data as Blob;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const ext = (entry.path.split(".").pop() ?? "").toLowerCase();
+        const validation = detectAndValidateImage(bytes, blob.size, blob.type, ext);
+        if (!validation.ok) throw new Error(`image_${validation.code}`);
+        detected[entry.kind] = {
+          width: validation.image.width,
+          height: validation.image.height,
+          format: validation.image.format,
+        };
+        if (validation.warnings.lowResolution) lowResolution = true;
+        const { data: consumed, error } = await (supabaseAdmin as any).rpc(
+          "consume_order_item_upload_authorization_v1",
+          {
+            p_order_id: session.orderId,
+            p_order_item_id: data.orderItemId,
+            p_session_id: session.sessionId,
+            p_kind: entry.kind,
+            p_storage_path: entry.path,
+            p_detected_format: validation.image.format,
+            p_detected_width: validation.image.width,
+            p_detected_height: validation.image.height,
+          },
+        );
+        if (error || !consumed?.ok) throw new Error("No se pudo consumir la autorización");
+      }
+
+      const validated = await validateDesignJson(data.designJson, {
+        orderId: session.orderId,
+        orderItemId: data.orderItemId,
+        modelId: item.phone_model_id ?? "",
+        allowGarment,
+        allowSecondaryGarment,
+      });
+      const clean = validated.clean as any;
+      const metadata = {
+        editor_schema_version: validated.versions.editor,
+        template_version: validated.versions.template,
+        mold_version: validated.versions.mold,
+        low_resolution_warning: lowResolution,
+        case_dimensions: detected.case ?? {},
+        garment_dimensions: detected.garment ?? {},
+        secondary_garment_dimensions: detected.secondary_garment ?? {},
+      };
+      const { data: result, error } = await (supabaseAdmin as any).rpc(
+        "finalize_order_item_designs_v1",
+        {
+          p_order_id: session.orderId,
+          p_order_item_id: data.orderItemId,
+          p_session_id: session.sessionId,
+          p_case_path: data.casePath,
+          p_garment_path: data.garmentPath ?? null,
+          p_secondary_garment_path: data.secondaryGarmentPath ?? null,
+          p_case_design: clean.case ?? null,
+          p_garment_design: clean.shirt ?? clean.garment ?? null,
+          p_secondary_garment_design: clean.secondary_garment ?? null,
+          p_bucket: DESIGN_BUCKET,
+          p_metadata: metadata,
+        },
+      );
+      if (error || !result?.ok) throw new Error("No se pudo finalizar el producto");
+      return { ok: true as const, lowResolution };
+    } catch (error) {
+      // Best effort only; the RPC refuses to mutate an item if payment became
+      // active between browser validation and this failure path.
+      await (supabaseAdmin as any).rpc("mark_order_item_design_failed_v1", {
+        p_order_id: session.orderId,
+        p_order_item_id: data.orderItemId,
+      });
+      throw error;
+    }
+  });
+
 
 const MarkFailedInput = z.object({ orderId: z.string().uuid() });
 export const markOrderDesignFailed = createServerFn({ method: "POST" })
@@ -1200,6 +1562,151 @@ export const getOrderCsrfToken = createServerFn({ method: "POST" })
     const { issueSignedCsrfToken } = await import("@/lib/csrf-signed");
     const csrfToken = issueSignedCsrfToken(sess.sessionId, data.orderId);
     return { csrfToken };
+  });
+
+// Multi-item cart engine. Mutations are session + CSRF scoped; the browser
+// supplies selections only, never prices or totals.
+const AddOrderItemInput = OrderItemSelectionInput.extend({
+  orderId: z.string().uuid(),
+  clientItemKey: z.string().trim().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/),
+});
+const UpdateOrderItemInput = OrderItemSelectionInput.extend({
+  orderId: z.string().uuid(),
+  orderItemId: z.string().uuid(),
+});
+const RemoveOrderItemInput = z.object({
+  orderId: z.string().uuid(),
+  orderItemId: z.string().uuid(),
+});
+
+async function enforceCartMutationLimit(orderId: string): Promise<void> {
+  await enforceRateLimit(
+    "cart_mutation",
+    hashBucketKey("cart_mutation_order", orderId),
+    RATE_LIMITS.cart_mutation.limit,
+    RATE_LIMITS.cart_mutation.window,
+  );
+}
+
+export const addOrderItem = createServerFn({ method: "POST" })
+  .inputValidator((input) => AddOrderItemInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceCartMutationLimit(session.orderId);
+    const payload = await resolveCanonicalOrderItem(data);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await (supabaseAdmin as any).rpc("add_order_item_v1", {
+      p_order_id: session.orderId,
+      p_client_item_key: data.clientItemKey,
+      p_request_fingerprint: fingerprintOrderItem(payload),
+      p_item: payload,
+    });
+    if (error) throw new Error(error.message);
+    return result as any;
+  });
+
+export const updateOrderItem = createServerFn({ method: "POST" })
+  .inputValidator((input) => UpdateOrderItemInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceCartMutationLimit(session.orderId);
+    const payload = await resolveCanonicalOrderItem(data);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await (supabaseAdmin as any).rpc("update_order_item_v1", {
+      p_order_id: session.orderId,
+      p_order_item_id: data.orderItemId,
+      p_request_fingerprint: fingerprintOrderItem(payload),
+      p_item: payload,
+    });
+    if (error) throw new Error(error.message);
+    return result as any;
+  });
+
+export const removeOrderItem = createServerFn({ method: "POST" })
+  .inputValidator((input) => RemoveOrderItemInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceCartMutationLimit(session.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await (supabaseAdmin as any).rpc("remove_order_item_v1", {
+      p_order_id: session.orderId,
+      p_order_item_id: data.orderItemId,
+    });
+    if (error) throw new Error(error.message);
+    return result as any;
+  });
+
+export const getCart = createServerFn({ method: "POST" })
+  .inputValidator((input) => OrderIdInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const orderId = await requireOrderSession(data.orderId);
+    await enforceRateLimit(
+      "order_read",
+      hashBucketKey("order_read", orderId),
+      RATE_LIMITS.order_read.limit,
+      RATE_LIMITS.order_read.window,
+    );
+    const items = await getOrderItemsByOrderId(orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order, error } = await supabaseAdmin.from("custom_orders")
+      .select("id,subtotal_amount,discount_amount,shipping_amount,total_amount,currency,design_status,payment_status")
+      .eq("id", orderId).maybeSingle();
+    if (error || !order) throw new Error("Pedido no encontrado");
+    return { order, items };
+  });
+
+/** Resolves the active cart exclusively from the HttpOnly order session. */
+export const getActiveCart = createServerFn({ method: "GET" })
+  .handler(async () => {
+    applyNoStoreHeaders();
+    const raw = getCookie(SESSION_COOKIE);
+    if (!raw) return null;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: session } = await supabaseAdmin.from("payment_sessions")
+      .select("order_id,expires_at,absolute_expires_at,revoked_at")
+      .eq("session_token_hash", hashToken(raw)).maybeSingle();
+    if (!session || session.revoked_at) return null;
+    const now = Date.now();
+    if (new Date(session.expires_at).getTime() <= now) return null;
+    if (session.absolute_expires_at && new Date(session.absolute_expires_at).getTime() <= now) return null;
+    const orderId = await requireOrderSession(session.order_id);
+    await enforceRateLimit(
+      "order_read",
+      hashBucketKey("active_cart", orderId),
+      RATE_LIMITS.order_read.limit,
+      RATE_LIMITS.order_read.window,
+    );
+    const { data: order, error } = await supabaseAdmin.from("custom_orders")
+      .select("id,order_number,subtotal_amount,discount_amount,shipping_amount,total_amount,currency,design_status,payment_status")
+      .eq("id", orderId).maybeSingle();
+    if (error || !order) return null;
+    if (["approved", "refunded", "charged_back"].includes(order.payment_status)) return null;
+    const items = await getOrderItemsByOrderId(orderId);
+    const itemIds = items.filter((item) => item.is_active).map((item) => item.id);
+    const { data: assets } = itemIds.length > 0
+      ? await supabaseAdmin.from("design_assets")
+          .select("order_item_id,file_path,kind")
+          .eq("order_id", orderId).in("order_item_id", itemIds).eq("kind", "case")
+      : { data: [] };
+    const previews = new Map<string, string>();
+    await Promise.all((assets ?? []).map(async (asset) => {
+      if (!asset.order_item_id || !asset.file_path || previews.has(asset.order_item_id)) return;
+      const { data: signed } = await supabaseAdmin.storage
+        .from(DESIGN_BUCKET).createSignedUrl(asset.file_path, 10 * 60);
+      if (signed?.signedUrl) previews.set(asset.order_item_id, signed.signedUrl);
+    }));
+    return {
+      order,
+      items: items.map((item) => ({ ...item, preview_url: previews.get(item.id) ?? null })),
+    };
   });
 
 
@@ -1585,7 +2092,6 @@ export const getPaymentBrickInit = createServerFn({ method: "POST" })
       .eq("id", orderId)
       .maybeSingle();
     if (!order) throw new Error("Pedido no encontrado");
-
     const designReady = (order as any).design_status === "ready";
     const orderEnv = ((order as any).payment_environment ?? "test") as
       | "test"
@@ -1765,6 +2271,7 @@ const CheckoutProPayment = z.object({
   metadata: z.object({ order_id: z.string().optional() }).passthrough().nullable().optional(),
   payment_type_id: z.string(),
   collector_id: z.union([z.string(), z.number()]).nullable().optional(),
+  preference_id: z.string().min(1).max(200),
 });
 
 const CheckoutProOrderInput = z.object({ orderId: z.string().uuid() });
@@ -1772,16 +2279,6 @@ const CheckoutProReturnInput = z.object({
   orderId: z.string().uuid(),
   paymentId: z.string().regex(/^[0-9]{1,30}$/),
 });
-
-function checkoutTitle(packType: string): string {
-  const labels: Record<string, string> = {
-    carcasa: "Carcasa personalizada VisualSkin",
-    "carcasa+polera": "Pack carcasa y polera VisualSkin",
-    "carcasa+poleron": "Pack carcasa y polerón VisualSkin",
-    "carcasa+polera+poleron": "Pack completo VisualSkin",
-  };
-  return labels[packType] ?? "Pedido personalizado VisualSkin";
-}
 
 function validateCheckoutUrl(raw: unknown, env: "test" | "production"): string | null {
   if (typeof raw !== "string" || !raw || /\s/.test(raw)) return null;
@@ -1798,7 +2295,7 @@ function validateCheckoutUrl(raw: unknown, env: "test" | "production"): string |
 }
 
 async function applyCheckoutProPayment(
-  order: { id: string; total_amount: number; currency: string; payment_environment: string; is_live_mode: boolean },
+  order: { id: string; payment_environment: string; is_live_mode: boolean },
   paymentRaw: unknown,
   mp: ReturnType<typeof getMercadoPagoConfig>,
 ) {
@@ -1811,8 +2308,7 @@ async function applyCheckoutProPayment(
   if (
     payment.external_reference !== order.id ||
     metadataOrderId !== order.id ||
-    payment.transaction_amount !== Number(order.total_amount) ||
-    payment.currency_id !== "CLP" || order.currency !== "CLP" ||
+    payment.currency_id !== "CLP" ||
     payment.live_mode !== order.is_live_mode ||
     order.payment_environment !== mp.env ||
     (mp.collectorId && collectorId !== mp.collectorId)
@@ -1820,17 +2316,19 @@ async function applyCheckoutProPayment(
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data: attached, error: attachError } = await supabaseAdmin.rpc(
-    "attach_mercado_pago_checkout_pro_attempt" as any,
-    { p_order_id: order.id, p_payment_id: paymentId, p_payment_environment: mp.env, p_is_live_mode: mp.isLiveMode } as any,
+    "attach_checkout_pro_snapshot_payment_v1" as any,
+    { p_order_id: order.id, p_payment_id: paymentId, p_preference_id: payment.preference_id,
+      p_payment_environment: mp.env, p_is_live_mode: mp.isLiveMode } as any,
   );
   if (attachError) throw new Error("No se pudo asociar el pago");
   const attach = attached as { ok?: boolean; code?: string; attempt_id?: string };
   if (!attach?.ok || !attach.attempt_id) throw new Error(`No se pudo asociar el pago: ${attach?.code ?? "unknown"}`);
 
   const { data: applied, error: applyError } = await supabaseAdmin.rpc(
-    "apply_mercado_pago_payment_response" as any,
+    "apply_checkout_pro_snapshot_payment_v1" as any,
     {
       p_order_id: order.id, p_attempt_id: attach.attempt_id, p_payment_id: paymentId,
+      p_preference_id: payment.preference_id,
       p_payment_status: payment.status, p_status_detail: payment.status_detail ?? null,
       p_live_mode: payment.live_mode, p_transaction_amount: payment.transaction_amount,
       p_currency_id: payment.currency_id, p_external_reference: payment.external_reference,
@@ -1858,19 +2356,11 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
     if (mp.env === "production") assertProductionPaymentsConfigured();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: order } = await supabaseAdmin.from("custom_orders")
-      .select("id,order_number,pack_type,total_amount,currency,payment_status,customer_email,design_status,payment_environment,is_live_mode,legal_accepted_at")
+      .select("id,order_number,payment_status,customer_email,payment_environment,is_live_mode,legal_accepted_at")
       .eq("id", sess.orderId).maybeSingle();
     if (!order) throw new Error("Pedido no encontrado");
     if (!(order as any).legal_accepted_at) throw new Error("Debes aceptar las condiciones antes de pagar");
     if (["approved", "refunded", "charged_back"].includes(order.payment_status)) throw new Error("Este pedido ya no admite pagos");
-    if (order.design_status !== "ready") throw new Error("Los diseños del pedido aún no están listos");
-    const { data: activeAttempt } = await supabaseAdmin.from("payment_attempts")
-      .select("id").eq("order_id", order.id)
-      .in("status", ["processing", "pending", "awaiting_reconciliation"])
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (activeAttempt) throw new Error("Estamos verificando un pago existente; no vuelvas a pagar todavía");
-    const amount = Number(order.total_amount);
-    if (!Number.isSafeInteger(amount) || amount <= 0 || order.currency !== "CLP") throw new Error("Monto canónico inválido");
     if ((order as any).payment_environment !== mp.env || (order as any).is_live_mode !== mp.isLiveMode) throw new Error("Entorno de pago incompatible");
     if (!z.string().email().safeParse(order.customer_email).success) throw new Error("Email del pedido inválido");
     const notificationUrl = buildMercadoPagoNotificationUrl(cfg.supabaseAdminUrl);
@@ -1880,20 +2370,27 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
     // Atomically claim preference creation. Concurrent tabs reuse the
     // backend-owned URL or wait briefly; they do not issue a second POST.
     const claimToken = randomUUID();
-    let claimed = false;
+    let claimed: { snapshotId: string; fingerprint: string; cartVersion: number; lines: MercadoPagoLine[]; total: number } | null = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const { data: claimRaw, error: claimError } = await supabaseAdmin.rpc(
-        "claim_mercado_pago_checkout_pro_preference" as any,
+        "claim_checkout_pro_cart_v1" as any,
         { p_order_id: order.id, p_environment: mp.env, p_claim_token: claimToken } as any,
       );
       if (claimError) throw new Error("No se pudo reservar el checkout");
-      const claim = claimRaw as { ok?: boolean; code?: string; checkout_url?: unknown };
+      const claim = claimRaw as { ok?: boolean; code?: string; checkout_url?: unknown; snapshot_id?: unknown;
+        cart_fingerprint?: unknown; cart_version?: unknown; line_items?: unknown; total_amount?: unknown };
       if (claim.ok && claim.code === "reused") {
         const checkoutUrl = validateCheckoutUrl(claim.checkout_url, mp.env);
         if (!checkoutUrl) throw new Error("La preferencia guardada no es válida");
         return { checkoutUrl };
       }
-      if (claim.ok && claim.code === "claimed") { claimed = true; break; }
+      if (claim.ok && claim.code === "claimed" && typeof claim.snapshot_id === "string"
+          && typeof claim.cart_fingerprint === "string" && typeof claim.cart_version === "number"
+          && Array.isArray(claim.line_items) && typeof claim.total_amount === "number") {
+        claimed = { snapshotId: claim.snapshot_id, fingerprint: claim.cart_fingerprint,
+          cartVersion: claim.cart_version, lines: claim.line_items as MercadoPagoLine[], total: claim.total_amount };
+        break;
+      }
       if (claim.code !== "creation_in_progress") {
         throw new Error("Este pedido no puede iniciar un checkout ahora");
       }
@@ -1901,13 +2398,32 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
     }
     if (!claimed) throw new Error("Mercado Pago se está abriendo en otra pestaña");
 
+    // Defence in depth: the database owns all prices and returns the exact
+    // provider lines; this assertion prevents sending any inconsistent sum.
+    const merchandise = claimed.lines.filter((line) => line.id !== "shipping");
+    const canonicalForAssertion: CanonicalCheckoutCart = {
+      schema: 1, order_id: order.id, currency: "CLP",
+      items: merchandise.map((line, position) => ({
+        id: line.id, position, pack_type: "database-validated", pack_id: null, quantity: line.quantity,
+        unit_price: line.unit_price, discount_amount: 0, line_total: line.unit_price * line.quantity,
+        phone_model_id: null, brand_id: null, brand: null, phone_model: null,
+        garment_id: null, garment_size: null, garment_color: null,
+        secondary_garment_id: null, secondary_garment_size: null, secondary_garment_color: null,
+      })),
+      subtotal_amount: merchandise.reduce((sum, line) => sum + line.unit_price * line.quantity, 0),
+      shipping_amount: claimed.lines.find((line) => line.id === "shipping")?.unit_price ?? 0,
+      total_amount: claimed.total,
+    };
+    assertCheckoutEconomy(canonicalForAssertion, claimed.lines);
+
     const preferenceCreatedAt = new Date();
     const preferenceExpiresAt = new Date(preferenceCreatedAt.getTime() + 30 * 60 * 1000);
     const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: { Authorization: `Bearer ${mp.accessToken}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${mp.accessToken}`, "Content-Type": "application/json",
+        "X-Idempotency-Key": `checkout-${claimed.snapshotId}` },
       body: JSON.stringify({
-        items: [{ id: order.id, title: checkoutTitle(order.pack_type), quantity: 1, currency_id: "CLP", unit_price: amount }],
+        items: claimed.lines,
         external_reference: order.id,
         payer: { email: order.customer_email },
         notification_url: notificationUrl,
@@ -1920,15 +2436,16 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
           expires: true,
           expiration_date_from: preferenceCreatedAt.toISOString(),
           expiration_date_to: preferenceExpiresAt.toISOString(),
-          metadata: { order_id: order.id, order_number: order.order_number, pack_type: order.pack_type },
+          metadata: { order_id: order.id, order_number: order.order_number,
+            cart_version: claimed.cartVersion, cart_fingerprint: claimed.fingerprint },
       }),
     });
     let body: { id?: unknown; init_point?: unknown; sandbox_init_point?: unknown } = {};
     try { body = await response.json(); } catch { /* closed response below */ }
     if (!response.ok) {
       await supabaseAdmin.rpc(
-        "release_mercado_pago_checkout_pro_preference_claim" as any,
-        { p_order_id: order.id, p_claim_token: claimToken } as any,
+        "release_checkout_pro_cart_claim_v1" as any,
+        { p_order_id: order.id, p_snapshot_id: claimed.snapshotId, p_claim_token: claimToken } as any,
       );
       throw new Error("Mercado Pago no pudo iniciar el checkout");
     }
@@ -1939,8 +2456,9 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
       throw new Error("Mercado Pago devolvió una preferencia inválida");
     }
     const { data: storeRaw, error: storeError } = await supabaseAdmin.rpc(
-      "store_mercado_pago_checkout_pro_preference" as any,
-      { p_order_id: order.id, p_environment: mp.env, p_claim_token: claimToken,
+      "store_checkout_pro_cart_v1" as any,
+      { p_order_id: order.id, p_snapshot_id: claimed.snapshotId,
+        p_environment: mp.env, p_claim_token: claimToken,
         p_preference_id: body.id, p_checkout_url: checkoutUrl,
         p_expires_at: preferenceExpiresAt.toISOString() } as any,
     );
@@ -1963,7 +2481,7 @@ export const reconcileMercadoPagoCheckoutProReturn = createServerFn({ method: "P
     const mp = getMercadoPagoConfig();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: order } = await supabaseAdmin.from("custom_orders")
-      .select("id,total_amount,currency,payment_status,payment_environment,is_live_mode")
+      .select("id,payment_status,payment_environment,is_live_mode")
       .eq("id", sess.orderId).maybeSingle();
     if (!order) throw new Error("Pedido no encontrado");
     if (["approved", "refunded", "charged_back"].includes(order.payment_status)) return { status: order.payment_status as PaymentStatus };
@@ -2546,6 +3064,7 @@ export const adminSetFulfillmentStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i) => AdminFulfillInput.parse(i))
   .handler(async ({ data, context }) => {
+    applyNoStoreHeaders();
     const { supabase, userId } = context;
     const { data: isAdmin } = await supabase.rpc("has_role", {
       _user_id: userId,
@@ -2641,7 +3160,88 @@ export const adminListOrders = createServerFn({ method: "POST" })
     };
   });
 
+type CompatibleOrderItem = OrderItem & {
+  source: "order_items" | "legacy";
+};
+
+async function getOrderItemsByOrderId(
+  orderId: string,
+): Promise<CompatibleOrderItem[]> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: itemRows, error: itemsError } = await supabaseAdmin
+    .from("order_items")
+    .select("*")
+    .eq("order_id", orderId)
+    .order("position", { ascending: true });
+
+  const missingTable =
+    itemsError?.code === "42P01" || itemsError?.code === "PGRST205";
+  if (itemsError && !missingTable) throw new Error(itemsError.message);
+  if (itemRows?.length) {
+    return (itemRows as OrderItem[]).map((item) => ({
+      ...item,
+      source: "order_items" as const,
+    }));
+  }
+
+  // Transitional fallback for code review/deployments where the additive
+  // migration has not run yet, and for any legacy row not backfilled yet.
+  const { data: order, error: orderError } = await supabaseAdmin
+    .from("custom_orders")
+    .select(
+      "id,pack_id,pack_type,brand_id,brand,phone_model_id,phone_model,garment_id,garment_size,garment_color,secondary_garment_id,secondary_garment_size,secondary_garment_color,subtotal_amount,discount_amount,catalog_snapshot,design_status,low_resolution_warning,created_at,updated_at",
+    )
+    .eq("id", orderId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order) return [];
+
+  const lineTotal = Math.max(0, Math.round(Number(order.subtotal_amount) || 0));
+  const discount = Math.max(0, Math.round(Number(order.discount_amount) || 0));
+  const gross = lineTotal + discount;
+  return [{
+    id: order.id,
+    order_id: order.id,
+    position: 0,
+    quantity: 1,
+    client_item_key: "legacy-initial-item",
+    request_fingerprint: createHash("sha256").update(`${order.id}:legacy-initial-item`).digest("hex"),
+    pack_id: order.pack_id,
+    pack_type: order.pack_type,
+    brand_id: order.brand_id,
+    brand: order.brand,
+    phone_model_id: order.phone_model_id,
+    phone_model: order.phone_model,
+    garment_id: order.garment_id,
+    garment_size: order.garment_size,
+    garment_color: order.garment_color,
+    secondary_garment_id: order.secondary_garment_id,
+    secondary_garment_size: order.secondary_garment_size,
+    secondary_garment_color: order.secondary_garment_color,
+    base_price: gross,
+    unit_price: gross,
+    discount_amount: discount,
+    line_total: lineTotal,
+    catalog_snapshot: order.catalog_snapshot ?? {},
+    design_status: order.design_status || "pending",
+    low_resolution_warning: order.low_resolution_warning,
+    is_active: true,
+    created_at: order.created_at,
+    updated_at: order.updated_at,
+    source: "legacy",
+  }];
+}
+
 const AdminOrderIdInput = z.object({ orderId: z.string().uuid() });
+
+export const adminGetOrderItems = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => AdminOrderIdInput.parse(i))
+  .handler(async ({ data, context }) => {
+    await requireAdmin(context as any);
+    applyNoStoreHeaders();
+    return { items: await getOrderItemsByOrderId(data.orderId) };
+  });
 
 export const adminGetOrderDetails = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

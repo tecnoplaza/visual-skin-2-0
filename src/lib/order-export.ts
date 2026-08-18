@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import {
   requestDesignUpload,
+  requestOrderItemDesignUpload,
   markOrderDesignFailed,
 } from "@/lib/orders.functions";
 import {
@@ -171,5 +172,22 @@ export async function uploadOrderDesign(
     }
     throw upErr;
   }
+  return req.path;
+}
+
+export async function uploadOrderItemDesign(
+  orderId: string,
+  orderItemId: string,
+  kind: "case" | "garment" | "secondary_garment",
+  blob: Blob,
+): Promise<string> {
+  const contentType = blob.type || "image/png";
+  const req = await requestOrderItemDesignUpload({
+    data: { orderId, orderItemId, kind, contentType, size: blob.size },
+  });
+  const { error } = await supabase.storage
+    .from(req.bucket)
+    .uploadToSignedUrl(req.path, req.token, blob, { contentType, upsert: false });
+  if (error) throw error;
   return req.path;
 }

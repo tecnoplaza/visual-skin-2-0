@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Upload, Smartphone, Shirt, Check, ArrowRight, ArrowLeft, Trash2, Loader2, RotateCw, Wand2 } from "lucide-react";
 import type Konva from "konva";
@@ -7,9 +8,10 @@ import { PACK_PRICES } from "../lib/mock-data";
 import { supabase } from "@/integrations/supabase/client";
 import { removeImageBackground } from "@/lib/remove-bg";
 import { usePromoPack, usePromoPacks } from "@/lib/cms";
-import { dataUrlToBlob, renderGarmentPNG, uploadOrderDesign } from "@/lib/order-export";
-import { createSecureOrder, finalizeOrderDesigns } from "@/lib/orders.functions";
+import { dataUrlToBlob, renderGarmentPNG, uploadOrderItemDesign } from "@/lib/order-export";
+import { addOrderItem, createSecureOrder, finalizeOrderItemDesigns, getOrderCsrfToken } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
+import { activeCartQueryOptions, cartWriteMode, CART_QUERY_KEY } from "@/lib/cart";
 import GarmentDesignCanvas, { type GarmentCanvasRow } from "@/components/personalizador/GarmentDesignCanvas";
 import { isValidGarmentPrintArea, type GarmentPrintArea } from "@/lib/garment-model";
 
@@ -46,7 +48,7 @@ function isValidGarment(g: GarmentRow): boolean {
 
 
 type PackId = "carcasa" | "carcasa+polera" | "carcasa+poleron" | "carcasa+polera+poleron";
-type Search = { pack?: PackId; id?: string };
+type Search = { pack?: PackId; id?: string; editItem?: string };
 
 export const Route = createFileRoute("/personalizador")({
   validateSearch: (s: Record<string, unknown>): Search => ({
@@ -55,6 +57,7 @@ export const Route = createFileRoute("/personalizador")({
         : s.pack === "carcasa" ? "carcasa"
         : "carcasa+polera",
     id: typeof s.id === "string" ? s.id : undefined,
+    editItem: typeof s.editItem === "string" ? s.editItem : undefined,
   }),
 
   component: Personalizador,
@@ -91,7 +94,7 @@ const modelImage = (m?: ModelRow | null) => m?.overlay_url || m?.mockup_url || m
 const modelReady = (m?: ModelRow | null) => !!m && m.mold_status === "listo" && !!modelImage(m);
 
 function Personalizador() {
-  const { pack: initialPack, id: promoId } = Route.useSearch();
+  const { pack: initialPack, id: promoId, editItem } = Route.useSearch();
   const { data: promoPack } = usePromoPack(promoId);
   // Only used to decide whether the "Carcasa + Polera + Polerón" pill is shown
   // in the initial selector. The pill is rendered only when an active promo
@@ -102,6 +105,8 @@ function Personalizador() {
       (p) => p.pack_type === "carcasa+polera+poleron" && p.is_active,
     ) ?? null;
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { data: activeCart } = useQuery(activeCartQueryOptions());
   // If a CMS pack is loaded, its type wins over the ?pack= param.
   const pack: PackId = (promoPack?.pack_type as PackId | undefined) ?? initialPack ?? "carcasa+polera";
   const isCompletePack = pack === "carcasa+polera+poleron";
@@ -116,6 +121,7 @@ function Personalizador() {
   const [caseDesign, setCaseDesign] = useState<Design | null>(null);
   const [shirtDesign, setShirtDesign] = useState<Design | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const clientItemKeyRef = useRef(`cart-${crypto.randomUUID()}`);
 
   const previewStageRef = useRef<Konva.Stage | null>(null);
 
@@ -261,6 +267,11 @@ function Personalizador() {
         <h1 className="font-display text-3xl font-bold md:text-4xl">Personalizador</h1>
         <p className="mt-2 text-sm text-muted-foreground">Diseña tu pack en {totalSteps} pasos</p>
       </div>
+      {editItem && (
+        <div className="mb-6 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-300">
+          La edición de un diseño guardado todavía no está habilitada porque el canvas no puede restaurar sus capas sin riesgo de pérdida. Puedes volver al carrito o crear un producto nuevo.
+        </div>
+      )}
 
       <div className="mb-8 flex items-center justify-center gap-2 overflow-x-auto">
         {stepLabels.map((label, i) => {
@@ -445,7 +456,7 @@ function Personalizador() {
                     disabled={!completeReady}
                     className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
                   >
-                    Pagar ${price.toLocaleString("es-CL")}
+                    Agregar al carrito · ${price.toLocaleString("es-CL")}
                   </button>
                 ) : (
                   <div className="flex flex-col items-end gap-1">
@@ -467,7 +478,7 @@ function Personalizador() {
                 disabled={!caseDesign || (hasShirt && (!shirtDesign || !selectedGarment)) || !model}
                 className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
               >
-                Pagar ${price.toLocaleString("es-CL")}
+                Agregar al carrito · ${price.toLocaleString("es-CL")}
               </button>
             )}
           </div>
@@ -475,6 +486,7 @@ function Personalizador() {
 
         {showCheckout && (
           <CheckoutDialog
+            additionalItem={Boolean(activeCart)}
             onClose={() => setShowCheckout(false)}
             onSubmit={async (customer) => {
               if (isCompletePack) {
@@ -514,29 +526,40 @@ function Personalizador() {
                 const shirtBlob = await renderGarmentPNG(selectedCompleteShirt, completeShirtDesign);
                 const hoodieBlob = await renderGarmentPNG(selectedCompleteHoodie, completeHoodieDesign);
 
-                // 2. Create order.
-                const result = await createSecureOrder({
-                  data: {
-                    packId: promoPack.id,
-                    packType: "carcasa+polera+poleron",
-                    phoneModelId: model.id,
-                    brand: brand?.name ?? null,
-                    garmentId: selectedCompleteShirt.id,
-                    garmentSize: completeShirtSize,
-                    garmentColor: selectedCompleteShirt.color,
-                    secondaryGarmentId: selectedCompleteHoodie.id,
-                    secondaryGarmentSize: completeHoodieSize,
-                    secondaryGarmentColor: selectedCompleteHoodie.color,
-                    customer,
-                    deliveryMethod: "shipping",
-                  },
-                });
-                setOrderCsrfToken(result.id, result.csrfToken);
+                const selection = {
+                  packId: promoPack.id, packType: "carcasa+polera+poleron" as const,
+                  phoneModelId: model.id, brand: brand?.name ?? null,
+                  garmentId: selectedCompleteShirt.id, garmentSize: completeShirtSize,
+                  garmentColor: selectedCompleteShirt.color,
+                  secondaryGarmentId: selectedCompleteHoodie.id,
+                  secondaryGarmentSize: completeHoodieSize,
+                  secondaryGarmentColor: selectedCompleteHoodie.color,
+                };
+                let orderId: string;
+                let orderItemId: string;
+                if (cartWriteMode(activeCart) === "add_item" && activeCart) {
+                  orderId = activeCart.order.id;
+                  const csrf = await getOrderCsrfToken({ data: { orderId } });
+                  setOrderCsrfToken(orderId, csrf.csrfToken);
+                  const added = await addOrderItem({ data: {
+                    orderId, clientItemKey: clientItemKeyRef.current, ...selection,
+                  } }) as { item?: { id?: string } };
+                  if (!added.item?.id) throw new Error("No se pudo agregar el producto");
+                  orderItemId = added.item.id;
+                } else {
+                  const created = await createSecureOrder({ data: {
+                    ...selection, customer, deliveryMethod: "shipping",
+                  } });
+                  orderId = created.id;
+                  orderItemId = created.orderItemId;
+                  setOrderCsrfToken(orderId, created.csrfToken);
+                }
+                await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
 
                 // 3. Upload three files independently.
-                const casePath = await uploadOrderDesign(result.id, "case", caseBlob);
-                const garmentPath = await uploadOrderDesign(result.id, "garment", shirtBlob);
-                const secondaryGarmentPath = await uploadOrderDesign(result.id, "secondary_garment", hoodieBlob);
+                const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
+                const garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", shirtBlob);
+                const secondaryGarmentPath = await uploadOrderItemDesign(orderId, orderItemId, "secondary_garment", hoodieBlob);
 
                 // 4. Build design JSON with three layers.
                 const persistedCaseDesign: PersistedDesignLayer = {
@@ -564,9 +587,9 @@ function Personalizador() {
                   secondary_garment: persistedHoodieDesign,
                 };
 
-                await finalizeOrderDesigns({
+                await finalizeOrderItemDesigns({
                   data: {
-                    orderId: result.id,
+                    orderId, orderItemId,
                     casePath,
                     garmentPath,
                     secondaryGarmentPath,
@@ -575,7 +598,8 @@ function Personalizador() {
                 });
 
                 setShowCheckout(false);
-                navigate({ to: "/pedido/$id", params: { id: result.id }, search: {} });
+                await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
+                navigate({ to: "/carrito", search: { added: true } });
                 return;
               }
 
@@ -603,28 +627,41 @@ function Personalizador() {
                 garmentBlob = await renderGarmentPNG(selectedGarment, shirtDesign);
               }
 
-              // 2. Create order — this ALSO opens the HttpOnly cookie session.
-              const result = await createSecureOrder({
-                data: {
-                  packId: promoId ?? null,
-                  packType: pack,
-                  phoneModelId: model.id,
-                  brand: brand?.name ?? null,
-                  garmentId: hasShirt ? selectedGarment?.id ?? null : null,
-                  garmentSize: hasShirt ? size : null,
-                  garmentColor: hasShirt ? selectedGarment?.color ?? null : null,
-                  customer,
-                  deliveryMethod: "shipping",
-                },
-              });
-              setOrderCsrfToken(result.id, result.csrfToken);
+              const selection = {
+                packId: promoId ?? null, packType: pack, phoneModelId: model.id,
+                brand: brand?.name ?? null,
+                garmentId: hasShirt ? selectedGarment?.id ?? null : null,
+                garmentSize: hasShirt ? size : null,
+                garmentColor: hasShirt ? selectedGarment?.color ?? null : null,
+                secondaryGarmentId: null, secondaryGarmentSize: null, secondaryGarmentColor: null,
+              };
+              let orderId: string;
+              let orderItemId: string;
+              if (cartWriteMode(activeCart) === "add_item" && activeCart) {
+                orderId = activeCart.order.id;
+                const csrf = await getOrderCsrfToken({ data: { orderId } });
+                setOrderCsrfToken(orderId, csrf.csrfToken);
+                const added = await addOrderItem({ data: {
+                  orderId, clientItemKey: clientItemKeyRef.current, ...selection,
+                } }) as { item?: { id?: string } };
+                if (!added.item?.id) throw new Error("No se pudo agregar el producto");
+                orderItemId = added.item.id;
+              } else {
+                const created = await createSecureOrder({ data: {
+                  ...selection, customer, deliveryMethod: "shipping",
+                } });
+                orderId = created.id;
+                orderItemId = created.orderItemId;
+                setOrderCsrfToken(orderId, created.csrfToken);
+              }
+              await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
 
 
               // 3. Request signed uploads and push each blob to the private bucket.
-              const casePath = await uploadOrderDesign(result.id, "case", caseBlob);
+              const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
               let garmentPath: string | null = null;
               if (garmentBlob) {
-                garmentPath = await uploadOrderDesign(result.id, "garment", garmentBlob);
+                garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", garmentBlob);
               }
 
               // 4. Build persisted design JSON (server-safe, no blob: URLs).
@@ -654,9 +691,9 @@ function Personalizador() {
                 ...(persistedGarmentDesign ? { garment: persistedGarmentDesign } : {}),
               };
 
-              await finalizeOrderDesigns({
+              await finalizeOrderItemDesigns({
                 data: {
-                  orderId: result.id,
+                  orderId, orderItemId,
                   casePath,
                   garmentPath,
                   designJson: persistedDesignJson,
@@ -664,12 +701,8 @@ function Personalizador() {
               });
 
               setShowCheckout(false);
-              // Navigate WITHOUT ?token=. The cookie is already set.
-              navigate({
-                to: "/pedido/$id",
-                params: { id: result.id },
-                search: {},
-              });
+              await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
+              navigate({ to: "/carrito", search: { added: true } });
             }}
           />
         )}
@@ -1290,9 +1323,11 @@ type CustomerData = {
 function CheckoutDialog({
   onClose,
   onSubmit,
+  additionalItem,
 }: {
   onClose: () => void;
   onSubmit: (data: CustomerData) => Promise<void>;
+  additionalItem: boolean;
 }) {
   const [form, setForm] = useState<CustomerData>({
     name: "",
@@ -1330,9 +1365,9 @@ function CheckoutDialog({
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="font-display text-xl font-semibold">Datos para el envío</h3>
+            <h3 className="font-display text-xl font-semibold">{additionalItem ? "Agregar producto" : "Datos para el envío"}</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Necesitamos estos datos para preparar y enviar tu pedido.
+              {additionalItem ? "Este producto se agregará al pedido activo." : "Necesitamos estos datos para preparar y enviar tu pedido."}
             </p>
           </div>
           <button
@@ -1344,7 +1379,7 @@ function CheckoutDialog({
           </button>
         </div>
 
-        <div className="mt-5 grid gap-3">
+        {!additionalItem && <div className="mt-5 grid gap-3">
           <label className="grid gap-1 text-xs">
             <span className="text-muted-foreground">Nombre completo *</span>
             <input required className={input} value={form.name} onChange={set("name")} />
@@ -1377,7 +1412,7 @@ function CheckoutDialog({
             <span className="text-muted-foreground">Observaciones</span>
             <textarea rows={3} className={input} value={form.notes} onChange={set("notes")} />
           </label>
-        </div>
+        </div>}
 
         {err && <p className="mt-3 text-xs text-destructive">{err}</p>}
 
@@ -1396,12 +1431,10 @@ function CheckoutDialog({
             className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-60"
           >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Continuar al pago
+            {additionalItem ? "Agregar al carrito" : "Crear pedido y agregar"}
           </button>
         </div>
       </form>
     </div>
   );
 }
-
-

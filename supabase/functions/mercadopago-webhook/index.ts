@@ -380,6 +380,7 @@ const CANONICAL_RECONCILE_REASONS = new Set<string>([
   "attempt_payment_id_mismatch",
   "payment_id_reused",
   "unexpected_transition",
+  "checkout_snapshot_mismatch",
 ]);
 
 async function processPayment(
@@ -441,6 +442,11 @@ async function processPayment(
 
     const currencyId =
       typeof payment.currency_id === "string" ? payment.currency_id : null;
+
+    const preferenceId =
+      typeof (payment as any).preference_id === "string"
+        ? ((payment as any).preference_id as string)
+        : null;
 
     const externalReference =
       typeof payment.external_reference === "string"
@@ -518,10 +524,32 @@ async function processPayment(
     }
     const order = orderRows[0];
     if (!order || externalReference !== order.id || metadataOrderId !== order.id ||
-        transactionAmount !== Number(order.total_amount) || currencyId !== "CLP" ||
+        currencyId !== "CLP" ||
         order.currency !== "CLP" || liveMode !== order.is_live_mode ||
         order.payment_environment !== cfg.env ||
         (cfg.collectorId !== null && collectorId !== cfg.collectorId)) {
+      await markEventTransient(cfg, eventId, "order_validation");
+      return "transient";
+    }
+
+    // Price authority is the immutable snapshot created before redirect, not
+    // mutable custom_orders and not webhook line-item data.
+    let snapshots: Array<{ id: string; total_amount: number; currency: string;
+      cart_version: number; cart_fingerprint: string }> = [];
+    if (preferenceId) {
+      try {
+        const snapshotRes = await sbFetch(cfg,
+          `/rest/v1/payment_checkout_snapshots?select=id,total_amount,currency,cart_version,cart_fingerprint&order_id=eq.${orderId}&preference_id=eq.${encodeURIComponent(preferenceId)}&status=eq.ready&limit=1`);
+        if (!snapshotRes.ok) throw new Error("snapshot_lookup_failed");
+        snapshots = await snapshotRes.json();
+      } catch {
+        await markEventTransient(cfg, eventId, "order_validation");
+        return "transient";
+      }
+    }
+    const snapshot = snapshots[0];
+    if ((preferenceId && (!snapshot || transactionAmount !== Number(snapshot.total_amount) || snapshot.currency !== "CLP"))
+        || (!preferenceId && transactionAmount !== Number(order.total_amount))) {
       await markEventTransient(cfg, eventId, "order_validation");
       return "transient";
     }
@@ -558,10 +586,15 @@ async function processPayment(
       }
     }
     if (!attemptId) {
+      if (!preferenceId) {
+        await markEventTransient(cfg, eventId, "attach_attempt");
+        return "transient";
+      }
       let attached: unknown;
       try {
-        attached = await sbRpc(cfg, "attach_mercado_pago_checkout_pro_attempt", {
+        attached = await sbRpc(cfg, "attach_checkout_pro_snapshot_payment_v1", {
           p_order_id: orderId, p_payment_id: canonicalPaymentId,
+          p_preference_id: preferenceId,
           p_payment_environment: cfg.env, p_is_live_mode: liveMode,
         });
       } catch {
@@ -581,10 +614,13 @@ async function processPayment(
     // and chargebacks. The caller closes payment_events after the RPC result.
     let applied: unknown;
     try {
-      applied = await sbRpc(cfg, "apply_mercado_pago_payment_response", {
+      applied = await sbRpc(cfg, preferenceId
+        ? "apply_checkout_pro_snapshot_payment_v1"
+        : "apply_mercado_pago_payment_response", {
         p_order_id: orderId,
         p_attempt_id: attemptId,
         p_payment_id: canonicalPaymentId,
+        ...(preferenceId ? { p_preference_id: preferenceId } : {}),
         p_payment_status: mpStatus,
         p_status_detail: statusDetail,
         p_live_mode: liveMode,

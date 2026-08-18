@@ -5,6 +5,7 @@ import { setResponseStatus, setResponseHeader } from "@tanstack/react-start/serv
 
 export type RateLimitScope =
   | "create_order"
+  | "cart_mutation"
   | "exchange_token"
   | "request_upload"
   | "finalize_design"
@@ -149,6 +150,7 @@ export async function enforceRateLimit(
 
 export const RATE_LIMITS = {
   create_order:      { limit: 10, window: 60 * 60 },        // 10 / hour / ip
+  cart_mutation:     { limit: 60, window: 60 * 60 },        // 60 / hour / order
   exchange_token:    { limit: 10, window: 15 * 60 },        // 10 / 15 min / order
   request_upload:    { limit: 15, window: 60 * 60 },        // 15 / hour / order
   finalize_design:   { limit: 10, window: 60 * 60 },        // 10 / hour / order

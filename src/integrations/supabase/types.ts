@@ -145,6 +145,8 @@ export type Database = {
       }
       custom_orders: {
         Row: {
+          cart_fingerprint: string | null
+          cart_version: number
           brand: string | null
           brand_id: string | null
           case_design_url: string | null
@@ -171,6 +173,13 @@ export type Database = {
           legal_accepted_at: string | null
           low_resolution_warning: boolean
           manual_review_required: boolean
+          mercadopago_checkout_url: string | null
+          mercadopago_preference_claim_token: string | null
+          mercadopago_preference_claimed_at: string | null
+          mercadopago_preference_created_at: string | null
+          mercadopago_preference_environment: string | null
+          mercadopago_preference_expires_at: string | null
+          mercadopago_preference_id: string | null
           mp_idempotency_key: string | null
           mp_payment_id: string | null
           mp_preference_id: string | null
@@ -179,6 +188,8 @@ export type Database = {
           pack_id: string | null
           pack_type: string
           payment_environment: string
+          payment_cart_fingerprint: string | null
+          payment_cart_version: number | null
           payment_provider: string | null
           payment_reference: string | null
           payment_status: string
@@ -201,6 +212,8 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          cart_fingerprint?: string | null
+          cart_version?: number
           brand?: string | null
           brand_id?: string | null
           case_design_url?: string | null
@@ -227,6 +240,13 @@ export type Database = {
           legal_accepted_at?: string | null
           low_resolution_warning?: boolean
           manual_review_required?: boolean
+          mercadopago_checkout_url?: string | null
+          mercadopago_preference_claim_token?: string | null
+          mercadopago_preference_claimed_at?: string | null
+          mercadopago_preference_created_at?: string | null
+          mercadopago_preference_environment?: string | null
+          mercadopago_preference_expires_at?: string | null
+          mercadopago_preference_id?: string | null
           mp_idempotency_key?: string | null
           mp_payment_id?: string | null
           mp_preference_id?: string | null
@@ -235,6 +255,8 @@ export type Database = {
           pack_id?: string | null
           pack_type: string
           payment_environment?: string
+          payment_cart_fingerprint?: string | null
+          payment_cart_version?: number | null
           payment_provider?: string | null
           payment_reference?: string | null
           payment_status?: string
@@ -257,6 +279,8 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          cart_fingerprint?: string | null
+          cart_version?: number
           brand?: string | null
           brand_id?: string | null
           case_design_url?: string | null
@@ -283,6 +307,13 @@ export type Database = {
           legal_accepted_at?: string | null
           low_resolution_warning?: boolean
           manual_review_required?: boolean
+          mercadopago_checkout_url?: string | null
+          mercadopago_preference_claim_token?: string | null
+          mercadopago_preference_claimed_at?: string | null
+          mercadopago_preference_created_at?: string | null
+          mercadopago_preference_environment?: string | null
+          mercadopago_preference_expires_at?: string | null
+          mercadopago_preference_id?: string | null
           mp_idempotency_key?: string | null
           mp_payment_id?: string | null
           mp_preference_id?: string | null
@@ -291,6 +322,8 @@ export type Database = {
           pack_id?: string | null
           pack_type?: string
           payment_environment?: string
+          payment_cart_fingerprint?: string | null
+          payment_cart_version?: number | null
           payment_provider?: string | null
           payment_reference?: string | null
           payment_status?: string
@@ -356,6 +389,7 @@ export type Database = {
           kind: string | null
           metadata: Json
           order_id: string | null
+          order_item_id: string | null
           width: number | null
         }
         Insert: {
@@ -370,6 +404,7 @@ export type Database = {
           kind?: string | null
           metadata?: Json
           order_id?: string | null
+          order_item_id?: string | null
           width?: number | null
         }
         Update: {
@@ -384,9 +419,17 @@ export type Database = {
           kind?: string | null
           metadata?: Json
           order_id?: string | null
+          order_item_id?: string | null
           width?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "design_assets_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: false
+            referencedRelation: "order_items"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "design_assets_order_id_fkey"
             columns: ["order_id"]
@@ -441,6 +484,7 @@ export type Database = {
           low_resolution_warning: boolean
           mold_version: string | null
           order_id: string
+          order_item_id: string | null
           phone_model_id: string | null
           secondary_garment_design: Json | null
           secondary_garment_id: string | null
@@ -464,6 +508,7 @@ export type Database = {
           low_resolution_warning?: boolean
           mold_version?: string | null
           order_id: string
+          order_item_id?: string | null
           phone_model_id?: string | null
           secondary_garment_design?: Json | null
           secondary_garment_id?: string | null
@@ -487,6 +532,7 @@ export type Database = {
           low_resolution_warning?: boolean
           mold_version?: string | null
           order_id?: string
+          order_item_id?: string | null
           phone_model_id?: string | null
           secondary_garment_design?: Json | null
           secondary_garment_id?: string | null
@@ -498,6 +544,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "final_designs_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: true
+            referencedRelation: "order_items"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "final_designs_garment_id_fkey"
             columns: ["garment_id"]
             isOneToOne: false
@@ -507,7 +560,7 @@ export type Database = {
           {
             foreignKeyName: "final_designs_order_id_fkey"
             columns: ["order_id"]
-            isOneToOne: true
+            isOneToOne: false
             referencedRelation: "custom_orders"
             referencedColumns: ["id"]
           },
@@ -602,6 +655,142 @@ export type Database = {
         }
         Relationships: []
       }
+      order_items: {
+        Row: {
+          base_price: number
+          brand: string | null
+          brand_id: string | null
+          catalog_snapshot: Json
+          client_item_key: string
+          created_at: string
+          design_status: string
+          discount_amount: number
+          garment_color: string | null
+          garment_id: string | null
+          garment_size: string | null
+          id: string
+          is_active: boolean
+          line_total: number
+          low_resolution_warning: boolean
+          order_id: string
+          pack_id: string | null
+          pack_type: string
+          phone_model: string | null
+          phone_model_id: string | null
+          position: number
+          quantity: number
+          request_fingerprint: string
+          secondary_garment_color: string | null
+          secondary_garment_id: string | null
+          secondary_garment_size: string | null
+          unit_price: number
+          updated_at: string
+        }
+        Insert: {
+          base_price: number
+          brand?: string | null
+          brand_id?: string | null
+          catalog_snapshot?: Json
+          client_item_key: string
+          created_at?: string
+          design_status?: string
+          discount_amount?: number
+          garment_color?: string | null
+          garment_id?: string | null
+          garment_size?: string | null
+          id?: string
+          is_active?: boolean
+          line_total: number
+          low_resolution_warning?: boolean
+          order_id: string
+          pack_id?: string | null
+          pack_type: string
+          phone_model?: string | null
+          phone_model_id?: string | null
+          position: number
+          quantity?: number
+          request_fingerprint: string
+          secondary_garment_color?: string | null
+          secondary_garment_id?: string | null
+          secondary_garment_size?: string | null
+          unit_price: number
+          updated_at?: string
+        }
+        Update: {
+          base_price?: number
+          brand?: string | null
+          brand_id?: string | null
+          catalog_snapshot?: Json
+          client_item_key?: string
+          created_at?: string
+          design_status?: string
+          discount_amount?: number
+          garment_color?: string | null
+          garment_id?: string | null
+          garment_size?: string | null
+          id?: string
+          is_active?: boolean
+          line_total?: number
+          low_resolution_warning?: boolean
+          order_id?: string
+          pack_id?: string | null
+          pack_type?: string
+          phone_model?: string | null
+          phone_model_id?: string | null
+          position?: number
+          quantity?: number
+          request_fingerprint?: string
+          secondary_garment_color?: string | null
+          secondary_garment_id?: string | null
+          secondary_garment_size?: string | null
+          unit_price?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_items_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_garment_id_fkey"
+            columns: ["garment_id"]
+            isOneToOne: false
+            referencedRelation: "garments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "custom_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_pack_id_fkey"
+            columns: ["pack_id"]
+            isOneToOne: false
+            referencedRelation: "promo_packs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_phone_model_id_fkey"
+            columns: ["phone_model_id"]
+            isOneToOne: false
+            referencedRelation: "phone_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_secondary_garment_id_fkey"
+            columns: ["secondary_garment_id"]
+            isOneToOne: false
+            referencedRelation: "garments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_recovery_tokens: {
         Row: {
           created_at: string
@@ -660,6 +849,7 @@ export type Database = {
           id: string
           kind: string
           order_id: string
+          order_item_id: string | null
           rejection_reason: string | null
           session_id: string | null
           status: string
@@ -679,6 +869,7 @@ export type Database = {
           id?: string
           kind: string
           order_id: string
+          order_item_id?: string | null
           rejection_reason?: string | null
           session_id?: string | null
           status?: string
@@ -698,6 +889,7 @@ export type Database = {
           id?: string
           kind?: string
           order_id?: string
+          order_item_id?: string | null
           rejection_reason?: string | null
           session_id?: string | null
           status?: string
@@ -705,6 +897,13 @@ export type Database = {
           uploaded_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "order_upload_authorizations_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: false
+            referencedRelation: "order_items"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "order_upload_authorizations_order_id_fkey"
             columns: ["order_id"]
@@ -721,8 +920,85 @@ export type Database = {
           },
         ]
       }
+      payment_checkout_snapshots: {
+        Row: {
+          canonical_cart: Json
+          cart_fingerprint: string
+          cart_version: number
+          checkout_url: string | null
+          claim_token: string | null
+          created_at: string
+          currency: string
+          environment: string
+          expires_at: string | null
+          id: string
+          line_items: Json
+          order_id: string
+          preference_id: string | null
+          provider: string
+          shipping_amount: number
+          status: string
+          stored_at: string | null
+          subtotal_amount: number
+          total_amount: number
+        }
+        Insert: {
+          canonical_cart: Json
+          cart_fingerprint: string
+          cart_version: number
+          checkout_url?: string | null
+          claim_token?: string | null
+          created_at?: string
+          currency?: string
+          environment: string
+          expires_at?: string | null
+          id?: string
+          line_items: Json
+          order_id: string
+          preference_id?: string | null
+          provider?: string
+          shipping_amount: number
+          status?: string
+          stored_at?: string | null
+          subtotal_amount: number
+          total_amount: number
+        }
+        Update: {
+          canonical_cart?: Json
+          cart_fingerprint?: string
+          cart_version?: number
+          checkout_url?: string | null
+          claim_token?: string | null
+          created_at?: string
+          currency?: string
+          environment?: string
+          expires_at?: string | null
+          id?: string
+          line_items?: Json
+          order_id?: string
+          preference_id?: string | null
+          provider?: string
+          shipping_amount?: number
+          status?: string
+          stored_at?: string | null
+          subtotal_amount?: number
+          total_amount?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_checkout_snapshots_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "custom_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payment_attempts: {
         Row: {
+          cart_fingerprint: string | null
+          cart_version: number | null
+          checkout_snapshot_id: string | null
           attempt_number: number
           completed_at: string | null
           created_at: string
@@ -731,8 +1007,12 @@ export type Database = {
           is_live_mode: boolean
           last_synced_at: string | null
           mercado_pago_payment_id: string | null
+          mercadopago_preference_id: string | null
           metadata: Json
           order_id: string
+          expected_currency: string | null
+          expected_total: number | null
+          payment_flow: string
           payment_environment: string
           previous_order_status: string | null
           request_fingerprint: string
@@ -741,6 +1021,9 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          cart_fingerprint?: string | null
+          cart_version?: number | null
+          checkout_snapshot_id?: string | null
           attempt_number: number
           completed_at?: string | null
           created_at?: string
@@ -749,8 +1032,12 @@ export type Database = {
           is_live_mode?: boolean
           last_synced_at?: string | null
           mercado_pago_payment_id?: string | null
+          mercadopago_preference_id?: string | null
           metadata?: Json
           order_id: string
+          expected_currency?: string | null
+          expected_total?: number | null
+          payment_flow?: string
           payment_environment?: string
           previous_order_status?: string | null
           request_fingerprint: string
@@ -759,6 +1046,9 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          cart_fingerprint?: string | null
+          cart_version?: number | null
+          checkout_snapshot_id?: string | null
           attempt_number?: number
           completed_at?: string | null
           created_at?: string
@@ -767,8 +1057,12 @@ export type Database = {
           is_live_mode?: boolean
           last_synced_at?: string | null
           mercado_pago_payment_id?: string | null
+          mercadopago_preference_id?: string | null
           metadata?: Json
           order_id?: string
+          expected_currency?: string | null
+          expected_total?: number | null
+          payment_flow?: string
           payment_environment?: string
           previous_order_status?: string | null
           request_fingerprint?: string
@@ -1242,6 +1536,28 @@ export type Database = {
       }
     }
     Functions: {
+      add_order_item_v1: {
+        Args: {
+          p_client_item_key: string
+          p_item: Json
+          p_order_id: string
+          p_request_fingerprint: string
+        }
+        Returns: Json
+      }
+      create_order_with_first_item_v1: {
+        Args: {
+          p_client_item_key: string
+          p_csrf_token_hash: string
+          p_item: Json
+          p_order: Json
+          p_request_fingerprint: string
+          p_session_absolute_expires_at: string
+          p_session_expires_at: string
+          p_session_token_hash: string
+        }
+        Returns: Json
+      }
       acquire_cleanup_lock: {
         Args: { p_actor: string; p_scope: string; p_ttl_seconds: number }
         Returns: boolean
@@ -1297,6 +1613,19 @@ export type Database = {
         }
         Returns: Json
       }
+      consume_order_item_upload_authorization_v1: {
+        Args: {
+          p_detected_format: string
+          p_detected_height: number
+          p_detected_width: number
+          p_kind: string
+          p_order_id: string
+          p_order_item_id: string
+          p_session_id: string
+          p_storage_path: string
+        }
+        Returns: Json
+      }
       consume_recovery_token: { Args: { p_token_hash: string }; Returns: Json }
       consume_upload_authorization: {
         Args: {
@@ -1335,12 +1664,32 @@ export type Database = {
         }
         Returns: Json
       }
+      finalize_order_item_designs_v1: {
+        Args: {
+          p_bucket: string
+          p_case_design: Json
+          p_case_path: string
+          p_garment_design: Json
+          p_garment_path: string
+          p_metadata?: Json
+          p_order_id: string
+          p_order_item_id: string
+          p_session_id: string
+          p_secondary_garment_design: Json
+          p_secondary_garment_path: string
+        }
+        Returns: Json
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
         Returns: boolean
+      }
+      mark_order_item_design_failed_v1: {
+        Args: { p_order_id: string; p_order_item_id: string }
+        Returns: Json
       }
       issue_recovery_token: {
         Args: {
@@ -1363,6 +1712,36 @@ export type Database = {
           p_ttl_seconds: number
         }
         Returns: string
+      }
+      issue_order_item_upload_authorization_v1: {
+        Args: {
+          p_declared_mime: string
+          p_declared_size: number
+          p_kind: string
+          p_order_id: string
+          p_order_item_id: string
+          p_session_id: string
+          p_storage_path: string
+          p_ttl_seconds: number
+        }
+        Returns: string
+      }
+      recalculate_order_from_items_v1: {
+        Args: { p_order_id: string }
+        Returns: Json
+      }
+      remove_order_item_v1: {
+        Args: { p_order_id: string; p_order_item_id: string }
+        Returns: Json
+      }
+      update_order_item_v1: {
+        Args: {
+          p_item: Json
+          p_order_id: string
+          p_order_item_id: string
+          p_request_fingerprint: string
+        }
+        Returns: Json
       }
       list_abandoned_orders: {
         Args: { p_limit: number }
