@@ -8,10 +8,12 @@ import {
 import { checkAuth, handleRequest, type ReconcileDependencies } from "./handler.ts";
 
 const SERVICE_ROLE = "test-service-role-key";
+const RECONCILE_SECRET = "test-reconcile-secret";
 
 const ENV_FIXTURE: Record<string, string> = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE,
+  MERCADOPAGO_RECONCILE_SECRET: RECONCILE_SECRET,
   MERCADOPAGO_ENV: "test",
   MERCADOPAGO_ACCESS_TOKEN_TEST: "test-mp-access-token",
   MERCADOPAGO_COLLECTOR_ID_TEST: "123456",
@@ -117,7 +119,7 @@ function baseDeps(
 function jsonReq(
   body: unknown,
   headers: Record<string, string> = {
-    Authorization: `Bearer ${SERVICE_ROLE}`,
+    Authorization: `Bearer ${RECONCILE_SECRET}`,
   },
   method = "POST",
 ): Request {
@@ -131,7 +133,7 @@ function jsonReq(
 function rawReq(
   body: string | null,
   headers: Record<string, string> = {
-    Authorization: `Bearer ${SERVICE_ROLE}`,
+    Authorization: `Bearer ${RECONCILE_SECRET}`,
   },
   method = "POST",
 ): Request {
@@ -275,10 +277,11 @@ Deno.test("A: authorization scheme parsing (incl. multi-space)", async () => {
     { header: "Bearer", expected: 401 },
     { header: "Bearer ", expected: 401 },
     { header: `Bearer wrong-token`, expected: 403 },
-    { header: `Bearer ${SERVICE_ROLE}`, expected: "ok" },
-    { header: `bearer ${SERVICE_ROLE}`, expected: "ok" },
-    { header: `Bearer  ${SERVICE_ROLE}`, expected: "ok" },
-    { header: `Bearer\t${SERVICE_ROLE}`, expected: "ok" },
+    { header: `Bearer ${SERVICE_ROLE}`, expected: 403 },
+    { header: `Bearer ${RECONCILE_SECRET}`, expected: "ok" },
+    { header: `bearer ${RECONCILE_SECRET}`, expected: "ok" },
+    { header: `Bearer  ${RECONCILE_SECRET}`, expected: "ok" },
+    { header: `Bearer\t${RECONCILE_SECRET}`, expected: "ok" },
   ];
   for (const { header, expected } of cases) {
     const { deps, state } = baseDeps([
@@ -304,9 +307,13 @@ Deno.test("A: checkAuth pure function", () => {
       method: "POST",
       headers: h ? { Authorization: h } : {},
     });
-  assertEquals(checkAuth(mk(), SERVICE_ROLE).ok, false);
-  assertEquals(checkAuth(mk(`Bearer ${SERVICE_ROLE}`), SERVICE_ROLE).ok, true);
-  const r = checkAuth(mk("Bearer wrong"), SERVICE_ROLE);
+  assertEquals(checkAuth(mk(), RECONCILE_SECRET).ok, false);
+  assertEquals(
+    checkAuth(mk(`Bearer ${RECONCILE_SECRET}`), RECONCILE_SECRET).ok,
+    true,
+  );
+  assertEquals(checkAuth(mk(`Bearer ${SERVICE_ROLE}`), RECONCILE_SECRET).ok, false);
+  const r = checkAuth(mk("Bearer wrong"), RECONCILE_SECRET);
   assert(!r.ok);
   assertEquals(r.ok === false && r.status, 403);
 });
@@ -319,6 +326,21 @@ Deno.test("B: missing MERCADOPAGO_ENV -> 503", async () => {
   assertEquals(res.status, 503);
   const body = await readJson(res);
   assertEquals(body.error, "configuration_unavailable");
+});
+
+Deno.test("B: missing or blank reconcile secret -> 503 without disclosure", async () => {
+  for (const value of [undefined, "", "   "]) {
+    const { deps, state } = baseDeps([], {
+      MERCADOPAGO_RECONCILE_SECRET: value,
+    });
+    const res = await handleRequest(jsonReq(previewBody()), deps);
+    assertEquals(res.status, 503);
+    const raw = await res.text();
+    assertEquals(JSON.parse(raw).error, "configuration_unavailable");
+    assertEquals(raw.includes(RECONCILE_SECRET), false);
+    assertEquals(raw.includes(SERVICE_ROLE), false);
+    assertEquals(state.calls.length, 0);
+  }
 });
 
 Deno.test("B: invalid env / missing token / test does not use prod creds", async () => {
@@ -554,7 +576,7 @@ Deno.test("E: preview does exactly one Supabase query, zero MP, zero RPC", async
 });
 
 Deno.test("E: preview response shape (no order_id, no full mp id, masked suffix)", async () => {
-  const { deps } = baseDeps([candidatesRoute([makeCandidate()])]);
+  const { deps, state } = baseDeps([candidatesRoute([makeCandidate()])]);
   const res = await handleRequest(jsonReq(previewBody()), deps);
   const body = await readJson(res);
   assertEquals(body.ok, true);
@@ -576,8 +598,16 @@ Deno.test("E: preview response shape (no order_id, no full mp id, masked suffix)
   assert(!serialized.includes(ORDER_ID), "order_id leaked");
   assert(!serialized.includes(MP_ID), "full MP id leaked");
   assert(!serialized.includes(SERVICE_ROLE), "service role leaked");
+  assert(!serialized.includes(RECONCILE_SECRET), "reconcile secret leaked");
   assert(!serialized.includes("collector"), "collector leaked");
   assert(!serialized.includes("metadata"), "metadata leaked");
+  const supabaseCall = state.calls.find((call) =>
+    new URL(call.url).host === "example.supabase.co"
+  );
+  assert(supabaseCall, "expected a Supabase request");
+  assertEquals(supabaseCall.headers.apikey, SERVICE_ROLE);
+  assertEquals(supabaseCall.headers.authorization, `Bearer ${SERVICE_ROLE}`);
+  assertEquals(supabaseCall.headers.authorization.includes(RECONCILE_SECRET), false);
 });
 
 Deno.test("E: preview ignores confirmation and does not execute", async () => {
@@ -880,6 +910,7 @@ Deno.test("H: preview of pending row — one SB call, zero MP, zero RPC, masked 
   assert(!serialized.includes(ORDER_ID));
   assert(!serialized.includes(MP_ID));
   assert(!serialized.includes(SERVICE_ROLE));
+  assert(!serialized.includes(RECONCILE_SECRET));
   assert(!serialized.includes("collector"));
   assert(!serialized.includes("metadata"));
 });

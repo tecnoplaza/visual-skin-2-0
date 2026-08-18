@@ -19,6 +19,7 @@ type Cfg =
       collectorId: string | null;
       supabaseUrl: string;
       serviceRole: string;
+      reconcileSecret: string;
     }
   | {
       ok: false;
@@ -27,6 +28,7 @@ type Cfg =
         | "invalid_environment"
         | "missing_access_token"
         | "missing_supabase_config"
+        | "missing_reconcile_secret"
         | "missing_collector_id"
         | "invalid_collector_id";
     };
@@ -85,6 +87,11 @@ function loadConfig(getEnv: (name: string) => string | undefined): Cfg {
     return { ok: false, code: "missing_supabase_config" };
   }
 
+  const reconcileSecret = getEnv("MERCADOPAGO_RECONCILE_SECRET")?.trim() ?? "";
+  if (!reconcileSecret) {
+    return { ok: false, code: "missing_reconcile_secret" };
+  }
+
   const rawCollector =
     env === "production"
       ? getEnv("MERCADOPAGO_COLLECTOR_ID_PRODUCTION")
@@ -102,7 +109,15 @@ function loadConfig(getEnv: (name: string) => string | undefined): Cfg {
     collectorId = trimmed;
   }
 
-  return { ok: true, env, accessToken, collectorId, supabaseUrl, serviceRole };
+  return {
+    ok: true,
+    env,
+    accessToken,
+    collectorId,
+    supabaseUrl,
+    serviceRole,
+    reconcileSecret,
+  };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -128,14 +143,14 @@ type AuthCheck = { ok: true } | { ok: false; status: 401 | 403 };
 
 // Bearer parser accepts single/multiple spaces or tabs between the scheme
 // and the token; rejects empty token, trailing content, or interior spaces.
-export function checkAuth(req: Request, serviceRole: string): AuthCheck {
+export function checkAuth(req: Request, reconcileSecret: string): AuthCheck {
   const h = req.headers.get("authorization") ?? req.headers.get("Authorization");
   if (!h) return { ok: false, status: 401 };
   const match = h.trim().match(BEARER_RE);
   if (!match) return { ok: false, status: 401 };
   const token = match[1];
   if (!token) return { ok: false, status: 401 };
-  return timingSafeEq(token, serviceRole)
+  return timingSafeEq(token, reconcileSecret)
     ? { ok: true }
     : { ok: false, status: 403 };
 }
@@ -605,7 +620,7 @@ export async function handleRequest(
   }
 
   // 3. Authorization
-  const auth = checkAuth(request, cfg.serviceRole);
+  const auth = checkAuth(request, cfg.reconcileSecret);
   if (!auth.ok) {
     return new Response(auth.status === 401 ? "unauthorized" : "forbidden", {
       status: auth.status,
