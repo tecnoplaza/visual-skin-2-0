@@ -12,6 +12,7 @@ import {
   unlockOrderDesign,
   acceptOrderLegalDocuments,
   getLegalAcceptanceAvailability,
+  updateOrderCustomerShipping,
 } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { productionDisplayLabel } from "@/lib/production-display";
@@ -124,6 +125,8 @@ function PedidoView() {
   const [legalSubmitting, setLegalSubmitting] = useState(false);
   const [legalError, setLegalError] = useState<string | null>(null);
   const [legalAvailable, setLegalAvailable] = useState<boolean | null>(null);
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerError, setCustomerError] = useState<string | null>(null);
   const legalSubmitLockRef = useRef(false);
   const submitLockRef = useRef(false);
   const returnReconcileRef = useRef<string | null>(null);
@@ -279,7 +282,7 @@ function PedidoView() {
       if (!r.accepted) {
         setLegalError(
           r.code === "documents_unavailable"
-            ? "Las condiciones de compra no estÃ¡n disponibles en este momento. IntÃ©ntalo nuevamente mÃ¡s tarde."
+            ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
             : "Este pedido ya no admite registrar la aceptación.",
         );
         return;
@@ -422,6 +425,13 @@ function PedidoView() {
   const designReady =
     order.design_status === "ready" || order.design_status === undefined;
   const designLocked = order.design_status === "locked";
+  const customerComplete =
+    !!order.customer_name?.trim() &&
+    !!order.customer_email?.trim() &&
+    !!order.customer_phone?.trim() &&
+    !!order.shipping_address?.address?.trim() &&
+    !!order.shipping_address?.comuna?.trim() &&
+    !!order.shipping_address?.region?.trim();
   // Fresh pending order (no attempts yet, design ready) â€” canonical first pay.
   const isFreshPending =
     isPending && !order.hasActiveAttempt && designReady;
@@ -436,6 +446,7 @@ function PedidoView() {
     !order.hasActiveAttempt &&
     designLocked;
   const showLegalPrompt =
+    customerComplete &&
     !legalAccepted &&
     !isApproved &&
     !isFinalNoRetry &&
@@ -524,18 +535,35 @@ function PedidoView() {
 
           <div className="rounded-2xl border border-border bg-card p-6">
             <h2 className="font-display text-lg font-semibold">Datos de envío</h2>
-            <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-              <Field k="Nombre" v={order.customer_name ?? "â€”"} />
-              <Field k="Email" v={order.customer_email} />
-              <Field k="Teléfono" v={order.customer_phone ?? "—"} />
-              <Field k="Dirección" v={order.shipping_address?.address ?? "—"} />
-              <Field k="Comuna" v={order.shipping_address?.comuna ?? "â€”"} />
-              <Field k="Región" v={order.shipping_address?.region ?? "—"} />
-            </dl>
-            {order.shipping_address?.notes && (
-              <p className="mt-4 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
-                <b className="text-foreground">Observaciones:</b> {order.shipping_address.notes}
-              </p>
+            {customerComplete ? (
+              <>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <Field k="Nombre" v={order.customer_name!} />
+                  <Field k="Email" v={order.customer_email} />
+                  <Field k="Teléfono" v={order.customer_phone!} />
+                  <Field k="Dirección" v={order.shipping_address!.address!} />
+                  <Field k="Comuna" v={order.shipping_address!.comuna!} />
+                  <Field k="Región" v={order.shipping_address!.region!} />
+                </dl>
+                {order.shipping_address?.notes && <p className="mt-4 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground"><b className="text-foreground">Observaciones:</b> {order.shipping_address.notes}</p>}
+              </>
+            ) : (
+              <CustomerShippingForm
+                saving={customerSaving}
+                error={customerError}
+                onSubmit={async (customer) => {
+                  setCustomerSaving(true);
+                  setCustomerError(null);
+                  try {
+                    await updateOrderCustomerShipping({ data: { orderId: order.id, customer } });
+                    await loadOrder();
+                  } catch (error) {
+                    setCustomerError(error instanceof Error ? error.message : "No se pudieron guardar los datos de envío");
+                  } finally {
+                    setCustomerSaving(false);
+                  }
+                }}
+              />
             )}
           </div>
         </div>
@@ -805,6 +833,46 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
+type CustomerFormData = {
+  name: string; phone: string; email: string; address: string;
+  comuna: string; region: string; notes: string;
+};
+
+function CustomerShippingForm({ saving, error, onSubmit }: {
+  saving: boolean;
+  error: string | null;
+  onSubmit: (customer: CustomerFormData) => Promise<void>;
+}) {
+  const [form, setForm] = useState<CustomerFormData>({
+    name: "", phone: "", email: "", address: "", comuna: "", region: "", notes: "",
+  });
+  const set = (key: keyof CustomerFormData) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      setForm((current) => ({ ...current, [key]: event.target.value }));
+  const input = "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground";
+  return (
+    <form className="mt-4 grid gap-3" onSubmit={(event) => { event.preventDefault(); void onSubmit(form); }}>
+      <p className="text-sm text-muted-foreground">Completa estos datos para continuar con las condiciones de compra y el pago.</p>
+      <label className="grid gap-1 text-xs"><span>Nombre completo *</span><input required minLength={2} className={input} value={form.name} onChange={set("name")} /></label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-xs"><span>Teléfono *</span><input required minLength={4} className={input} value={form.phone} onChange={set("phone")} /></label>
+        <label className="grid gap-1 text-xs"><span>Email *</span><input type="email" required className={input} value={form.email} onChange={set("email")} /></label>
+      </div>
+      <label className="grid gap-1 text-xs"><span>Dirección *</span><input required minLength={3} className={input} value={form.address} onChange={set("address")} /></label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-xs"><span>Comuna *</span><input required className={input} value={form.comuna} onChange={set("comuna")} /></label>
+        <label className="grid gap-1 text-xs"><span>Región *</span><input required className={input} value={form.region} onChange={set("region")} /></label>
+      </div>
+      <label className="grid gap-1 text-xs"><span>Observaciones</span><textarea rows={3} className={input} value={form.notes} onChange={set("notes")} /></label>
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      <button type="submit" disabled={saving} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-5 py-3 text-sm font-semibold text-black disabled:opacity-50">
+        {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+        Guardar y continuar
+      </button>
+    </form>
+  );
+}
+
 function LegalAcceptanceCard({
   available,
   checked,
@@ -826,7 +894,7 @@ function LegalAcceptanceCard({
         role="alert"
         className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-4 text-xs text-yellow-400"
       >
-        Las condiciones de compra no estÃ¡n disponibles en este momento. IntÃ©ntalo nuevamente mÃ¡s tarde.
+        Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde.
       </div>
     );
   }
@@ -835,7 +903,7 @@ function LegalAcceptanceCard({
   const linkCls =
     "inline-flex items-center gap-0.5 text-neon-blue underline underline-offset-2 hover:text-neon-blue/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue/50 rounded-sm";
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 text-xs">
+    <div className="rounded-2xl border border-border bg-card p-5 text-xs shadow-sm sm:p-6">
       <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
         <FileText className="h-4 w-4 text-neon-blue" />
         Antes de pagar
@@ -846,7 +914,7 @@ function LegalAcceptanceCard({
       <ul className="mt-3 space-y-1 text-muted-foreground">
         <li>
           <Link to="/terminos" target="_blank" rel="noopener" className={linkCls}>
-            TÃ©rminos y Condiciones <ExternalLink className="h-3 w-3" />
+            Términos y Condiciones <ExternalLink className="h-3 w-3" />
           </Link>
         </li>
         <li>
@@ -861,7 +929,7 @@ function LegalAcceptanceCard({
         </li>
         <li>
           <Link to="/privacidad" target="_blank" rel="noopener" className={linkCls}>
-            PolÃ­tica de Privacidad <ExternalLink className="h-3 w-3" />
+            Política de Privacidad <ExternalLink className="h-3 w-3" />
           </Link>
         </li>
       </ul>
@@ -875,8 +943,8 @@ function LegalAcceptanceCard({
           aria-describedby="legal-accept-help"
         />
         <span id="legal-accept-help" className="text-[12px] leading-snug text-foreground">
-          He leÃ­do y acepto los TÃ©rminos y Condiciones y la PolÃ­tica de Cambios y
-          Devoluciones. TambiÃ©n declaro haber leÃ­do la PolÃ­tica de Privacidad.
+          He leído y acepto los Términos y Condiciones y la Política de Cambios y
+          Devoluciones. También declaro haber leído la Política de Privacidad.
         </span>
       </label>
       {error && (
@@ -893,7 +961,7 @@ function LegalAcceptanceCard({
       >
         {submitting ? (
           <>
-            <Loader2 className="h-3 w-3 animate-spin" /> Registrando aceptaciÃ³nâ€¦
+            <Loader2 className="h-3 w-3 animate-spin" /> Registrando aceptación…
           </>
         ) : (
           "Aceptar y continuar al pago"

@@ -317,9 +317,11 @@ const OrderItemSelectionInput = z.object({
   secondaryGarmentColor: z.string().max(60).nullable().optional(),
 });
 
-const CreateOrderInput = OrderItemSelectionInput.extend({
+const CreateOrderInput = OrderItemSelectionInput;
+
+const UpdateOrderCustomerInput = z.object({
+  orderId: z.string().uuid(),
   customer: CustomerSchema,
-  deliveryMethod: z.enum(["shipping", "pickup"]).default("shipping"),
 });
 
 type OrderItemSelection = z.infer<typeof OrderItemSelectionInput>;
@@ -645,10 +647,7 @@ export const createSecureOrder = createServerFn({ method: "POST" })
       packRow.sale_price != null ? Number(packRow.sale_price) : basePrice;
     const subtotal = Math.round(effective);
     const discount = Math.max(0, Math.round(basePrice - effective));
-    const shippingResult = await computeCanonicalShipping(
-      data.packType,
-      data.deliveryMethod,
-    );
+    const shippingResult = await computeCanonicalShipping(data.packType, "shipping");
     const shipping = shippingResult.amount;
     const total = subtotal + shipping;
     if (total <= 0) throw new Error("Total inválido");
@@ -714,17 +713,13 @@ export const createSecureOrder = createServerFn({ method: "POST" })
         secondary_garment_id: secondaryGarmentRow?.id ?? null,
         secondary_garment_size: secondaryGarmentRow ? canonicalSecondarySize : null,
         secondary_garment_color: secondaryGarmentRow ? secondaryGarmentRow.color : null,
-        customer_name: data.customer.name,
-        customer_email: data.customer.email,
-        customer_phone: data.customer.phone,
-        shipping_address: {
-          address: data.customer.address,
-          comuna: data.customer.comuna,
-          region: data.customer.region,
-          notes: data.customer.notes ?? "",
-          delivery_method: data.deliveryMethod,
-        },
-        notes: data.customer.notes || null,
+        // customer_email is NOT NULL in the current schema. An empty value is
+        // the draft sentinel; no customer identity is fabricated before checkout.
+        customer_name: null,
+        customer_email: "",
+        customer_phone: null,
+        shipping_address: { delivery_method: "shipping" },
+        notes: null,
         subtotal_amount: subtotal,
         discount_amount: discount,
         shipping_amount: shipping,
@@ -1709,6 +1704,42 @@ export const getActiveCart = createServerFn({ method: "GET" })
     };
   });
 
+export const updateOrderCustomerShipping = createServerFn({ method: "POST" })
+  .inputValidator((i) => UpdateOrderCustomerInput.parse(i))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    await requireOrderSessionAndCsrf(data.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order, error: readError } = await supabaseAdmin
+      .from("custom_orders")
+      .select("id,payment_status,legal_accepted_at")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (readError || !order) throw new Error("Pedido no encontrado");
+    if (order.payment_status !== "pending" || order.legal_accepted_at) {
+      throw new Error("Este pedido ya no permite modificar los datos de envío");
+    }
+    const { error } = await supabaseAdmin
+      .from("custom_orders")
+      .update({
+        customer_name: data.customer.name,
+        customer_email: data.customer.email,
+        customer_phone: data.customer.phone,
+        shipping_address: {
+          address: data.customer.address,
+          comuna: data.customer.comuna,
+          region: data.customer.region,
+          notes: data.customer.notes,
+          delivery_method: "shipping",
+        },
+        notes: data.customer.notes || null,
+      })
+      .eq("id", data.orderId);
+    if (error) throw new Error("No se pudieron guardar los datos de envío");
+    return { ok: true };
+  });
+
 
 // ------------------------------------------------------------------
 // Shopify Checkout — server-side cart creation
@@ -2356,13 +2387,20 @@ export const createMercadoPagoCheckoutPro = createServerFn({ method: "POST" })
     if (mp.env === "production") assertProductionPaymentsConfigured();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: order } = await supabaseAdmin.from("custom_orders")
-      .select("id,order_number,payment_status,customer_email,payment_environment,is_live_mode,legal_accepted_at")
+      .select("id,order_number,payment_status,customer_name,customer_email,customer_phone,shipping_address,payment_environment,is_live_mode,legal_accepted_at")
       .eq("id", sess.orderId).maybeSingle();
     if (!order) throw new Error("Pedido no encontrado");
     if (!(order as any).legal_accepted_at) throw new Error("Debes aceptar las condiciones antes de pagar");
     if (["approved", "refunded", "charged_back"].includes(order.payment_status)) throw new Error("Este pedido ya no admite pagos");
     if ((order as any).payment_environment !== mp.env || (order as any).is_live_mode !== mp.isLiveMode) throw new Error("Entorno de pago incompatible");
     if (!z.string().email().safeParse(order.customer_email).success) throw new Error("Email del pedido inválido");
+    const checkoutAddress = (order as any).shipping_address ?? {};
+    if (!CustomerSchema.safeParse({
+      name: (order as any).customer_name, email: order.customer_email,
+      phone: (order as any).customer_phone, address: checkoutAddress.address,
+      comuna: checkoutAddress.comuna, region: checkoutAddress.region,
+      notes: checkoutAddress.notes ?? "",
+    }).success) throw new Error("Completa los datos de envío antes de pagar");
     const notificationUrl = buildMercadoPagoNotificationUrl(cfg.supabaseAdminUrl);
     const siteOrigin = buildCheckoutProSiteOrigin(cfg);
     if (!notificationUrl || !siteOrigin) throw new Error("Configuración de URLs de pago inválida");
@@ -3609,11 +3647,18 @@ export const acceptOrderLegalDocuments = createServerFn({ method: "POST" })
     const { data: order, error: readErr } = await supabaseAdmin
       .from("custom_orders")
       .select(
-        "id,order_number,payment_status,legal_accepted_at,legal_acceptance_hash",
+        "id,order_number,payment_status,customer_name,customer_email,customer_phone,shipping_address,legal_accepted_at,legal_acceptance_hash",
       )
       .eq("id", orderId)
       .maybeSingle();
     if (readErr || !order) throw new Error("Pedido no encontrado");
+    const acceptanceAddress = (order as any).shipping_address ?? {};
+    if (!CustomerSchema.safeParse({
+      name: (order as any).customer_name, email: (order as any).customer_email,
+      phone: (order as any).customer_phone, address: acceptanceAddress.address,
+      comuna: acceptanceAddress.comuna, region: acceptanceAddress.region,
+      notes: acceptanceAddress.notes ?? "",
+    }).success) throw new Error("Completa los datos de envío antes de aceptar las condiciones");
 
     // Idempotency — already accepted, return existing record verbatim.
     if ((order as any).legal_accepted_at) {

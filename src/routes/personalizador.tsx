@@ -486,9 +486,9 @@ function Personalizador() {
 
         {showCheckout && (
           <CheckoutDialog
-            additionalItem={Boolean(activeCart)}
+            additionalItem
             onClose={() => setShowCheckout(false)}
-            onSubmit={async (customer) => {
+            onSubmit={async () => {
               if (isCompletePack) {
                 if (!promoPack || promoPack.is_active !== true) {
                   throw new Error("PACK_COMPLETE_NOT_ENABLED");
@@ -547,9 +547,7 @@ function Personalizador() {
                   if (!added.item?.id) throw new Error("No se pudo agregar el producto");
                   orderItemId = added.item.id;
                 } else {
-                  const created = await createSecureOrder({ data: {
-                    ...selection, customer, deliveryMethod: "shipping",
-                  } });
+                  const created = await createSecureOrder({ data: selection });
                   orderId = created.id;
                   orderItemId = created.orderItemId;
                   setOrderCsrfToken(orderId, created.csrfToken);
@@ -647,9 +645,7 @@ function Personalizador() {
                 if (!added.item?.id) throw new Error("No se pudo agregar el producto");
                 orderItemId = added.item.id;
               } else {
-                const created = await createSecureOrder({ data: {
-                  ...selection, customer, deliveryMethod: "shipping",
-                } });
+                const created = await createSecureOrder({ data: selection });
                 orderId = created.id;
                 orderItemId = created.orderItemId;
                 setOrderCsrfToken(orderId, created.csrfToken);
@@ -1365,9 +1361,9 @@ function CheckoutDialog({
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="font-display text-xl font-semibold">{additionalItem ? "Agregar producto" : "Datos para el envío"}</h3>
+            <h3 className="font-display text-xl font-semibold">Agregar producto</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              {additionalItem ? "Este producto se agregará al pedido activo." : "Necesitamos estos datos para preparar y enviar tu pedido."}
+              El producto se agregará a tu carrito. Completarás los datos de envío cuando termines.
             </p>
           </div>
           <button
@@ -1431,7 +1427,7 @@ function CheckoutDialog({
             className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-60"
           >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            {additionalItem ? "Agregar al carrito" : "Crear pedido y agregar"}
+            Agregar al carrito
           </button>
         </div>
       </form>
