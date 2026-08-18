@@ -16,7 +16,7 @@ import {
 } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { productionDisplayLabel } from "@/lib/production-display";
-import { activeCartItems, activeCartQueryOptions, cartPackLabel } from "@/lib/cart";
+import { activeCartItems, activeCartQueryOptions, cartItemPreviewSlots, cartPackLabel, type CartItem } from "@/lib/cart";
 
 // Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
 // implemented below as a temporary fallback and can be re-enabled deliberately.
@@ -109,7 +109,8 @@ function PedidoView() {
   const { id } = Route.useParams();
   const { token, mp_return: mpReturn, payment_id: returnPaymentId } = Route.useSearch();
   const navigate = useNavigate();
-  const { data: activeCart } = useQuery(activeCartQueryOptions());
+  const activeCartQuery = useQuery(activeCartQueryOptions());
+  const activeCart = activeCartQuery.data;
   const cartForOrder = activeCart?.order.id === id ? activeCart : null;
   const cartItems = activeCartItems(cartForOrder);
 
@@ -151,6 +152,10 @@ function PedidoView() {
   useEffect(() => {
     loadOrderRef.current = loadOrder;
   }, [loadOrder]);
+
+  useEffect(() => {
+    if (sessionReady) void activeCartQuery.refetch();
+  }, [sessionReady, activeCartQuery.refetch]);
 
   // ---- On mount: if URL has token, exchange it for a cookie session then
   //      remove the token from the URL, otherwise try to use existing cookie.
@@ -474,65 +479,10 @@ function PedidoView() {
             <div className="rounded-2xl border border-border bg-card p-6">
               <h2 className="font-display text-lg font-semibold">Productos del pedido</h2>
               <div className="mt-4 space-y-3">
-                {cartItems.map((item, index) => (
-                  <div key={item.id} className="rounded-xl border border-border bg-background p-4 text-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div><p className="text-xs text-muted-foreground">Producto {index + 1}</p><p className="font-semibold">{cartPackLabel(item.pack_type)}</p><p className="text-muted-foreground">{item.brand ? `${item.brand} · ` : ""}{item.phone_model ?? "—"}</p></div>
-                      <strong className="font-mono">${item.line_total.toLocaleString("es-CL")}</strong>
-                    </div>
-                    {item.garment_id && <p className="mt-2 text-xs text-muted-foreground">Prenda {item.garment_size ?? "—"}{item.garment_color ? ` / ${item.garment_color}` : ""}</p>}
-                    {item.secondary_garment_id && <p className="text-xs text-muted-foreground">Segunda prenda {item.secondary_garment_size ?? "—"}{item.secondary_garment_color ? ` / ${item.secondary_garment_color}` : ""}</p>}
-                  </div>
-                ))}
+                {cartItems.map((item, index) => <OrderItemSummaryCard key={item.id} item={item} index={index} />)}
               </div>
             </div>
           )}
-          <div className={`grid gap-4 ${isCompletePack ? "sm:grid-cols-2 lg:grid-cols-3" : hasShirt ? "sm:grid-cols-2" : ""}`}>
-            {order.case_design_url && (
-              <figure className="overflow-hidden rounded-2xl border border-border bg-card">
-                <div className="flex min-h-[300px] items-center justify-center p-6 sm:min-h-[380px] sm:p-8">
-                  <img
-                    src={order.case_design_url}
-                    alt="DiseÃ±o carcasa"
-                    className="block h-auto max-h-[460px] w-auto max-w-[78%] object-contain sm:max-h-[540px] sm:max-w-[72%] lg:max-h-[580px] lg:max-w-[68%]"
-                  />
-                </div>
-                <figcaption className="border-t border-border p-3 text-center text-xs text-muted-foreground">
-                  Carcasa Â· {order.phone_model}
-                </figcaption>
-              </figure>
-            )}
-            {isCompletePack ? (
-              <>
-                {order.garment_design_url && (
-                  <figure className="overflow-hidden rounded-2xl border border-border bg-card">
-                    <img src={order.garment_design_url} alt="DiseÃ±o polera" className="h-full w-full object-contain" />
-                    <figcaption className="border-t border-border p-3 text-center text-xs text-muted-foreground">
-                      Polera Â· Talla {order.garment_size}
-                    </figcaption>
-                  </figure>
-                )}
-                {order.secondary_garment_design_url && (
-                  <figure className="overflow-hidden rounded-2xl border border-border bg-card">
-                    <img src={order.secondary_garment_design_url} alt="DiseÃ±o polerÃ³n" className="h-full w-full object-contain" />
-                    <figcaption className="border-t border-border p-3 text-center text-xs text-muted-foreground">
-                      PolerÃ³n Â· Talla {order.secondary_garment_size}
-                    </figcaption>
-                  </figure>
-                )}
-              </>
-            ) : (
-              hasShirt && order.garment_design_url && (
-                <figure className="overflow-hidden rounded-2xl border border-border bg-card">
-                  <img src={order.garment_design_url} alt="DiseÃ±o prenda" className="h-full w-full object-contain" />
-                  <figcaption className="border-t border-border p-3 text-center text-xs text-muted-foreground capitalize">
-                    {order.pack_type === "carcasa+poleron" ? "PolerÃ³n" : "Polera"} Â· Talla {order.garment_size}
-                  </figcaption>
-                </figure>
-              )
-            )}
-          </div>
-
           <div className="rounded-2xl border border-border bg-card p-6">
             <h2 className="font-display text-lg font-semibold">Datos de envío</h2>
             {customerComplete ? (
@@ -796,6 +746,40 @@ function PedidoView() {
         </aside>
       </div>
     </section>
+  );
+}
+
+function OrderItemSummaryCard({ item, index }: { item: CartItem; index: number }) {
+  const previews = cartItemPreviewSlots(item);
+  return (
+    <article className="rounded-xl border border-border bg-background p-4 text-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}>
+          {previews.map((preview) => (
+            <figure key={preview.kind} className="min-w-0">
+              <div className="flex h-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-card sm:w-20">
+                {preview.url ? (
+                  <img src={preview.url} alt={`${preview.label} del producto ${index + 1}`} className="h-full w-full object-contain p-1" />
+                ) : (
+                  <span className="px-1 text-center text-[9px] leading-tight text-muted-foreground">Sin preview</span>
+                )}
+              </div>
+              <figcaption className="mt-1 text-center text-[9px] text-muted-foreground">{preview.label}</figcaption>
+            </figure>
+          ))}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-muted-foreground">Producto {index + 1}</p>
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="font-semibold">{cartPackLabel(item.pack_type)}</h3>
+            <strong className="shrink-0 font-mono">${item.line_total.toLocaleString("es-CL")}</strong>
+          </div>
+          <p className="truncate text-xs text-muted-foreground">{item.brand ? `${item.brand} · ` : ""}{item.phone_model ?? "Modelo pendiente"}</p>
+          {item.garment_id && <p className="text-[11px] text-muted-foreground">{item.pack_type === "carcasa+poleron" ? "Polerón" : "Polera"}: {item.garment_size ?? "—"}{item.garment_color ? ` / ${item.garment_color}` : ""}</p>}
+          {item.secondary_garment_id && <p className="text-[11px] text-muted-foreground">Polerón: {item.secondary_garment_size ?? "—"}{item.secondary_garment_color ? ` / ${item.secondary_garment_color}` : ""}</p>}
+        </div>
+      </div>
+    </article>
   );
 }
 

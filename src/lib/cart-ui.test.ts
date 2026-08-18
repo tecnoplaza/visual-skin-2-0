@@ -5,6 +5,7 @@ import test from "node:test";
 const cartRoute = readFileSync(new URL("../routes/carrito.tsx", import.meta.url), "utf8");
 const customizer = readFileSync(new URL("../routes/personalizador.tsx", import.meta.url), "utf8");
 const orders = readFileSync(new URL("./orders.functions.ts", import.meta.url), "utf8");
+const orderRoute = readFileSync(new URL("../routes/pedido.$id.tsx", import.meta.url), "utf8");
 
 test("eliminar refresca la query canónica del carrito", () => {
   assert.match(cartRoute, /removeOrderItem/);
@@ -40,4 +41,11 @@ test("previews del carrito quedan aisladas por order_item_id y kind", () => {
   assert.match(source, /`\$\{asset\.order_item_id\}:\$\{asset\.kind\}`/);
   assert.match(source, /createSignedUrl\(asset\.file_path, 10 \* 60\)/);
   assert.doesNotMatch(source, /\.eq\("kind", "case"\)/);
+});
+
+test("resumen y pago representa todos los order_items activos", () => {
+  assert.match(orderRoute, /cartItems\.map\(\(item, index\) => <OrderItemSummaryCard/);
+  assert.match(orderRoute, /const previews = cartItemPreviewSlots\(item\)/);
+  assert.match(orderRoute, /activeCartQuery\.refetch\(\)/);
+  assert.doesNotMatch(orderRoute, /src=\{order\.case_design_url\}/);
 });
