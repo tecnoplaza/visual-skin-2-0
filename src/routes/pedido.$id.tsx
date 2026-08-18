@@ -98,7 +98,7 @@ export const Route = createFileRoute("/pedido/$id")({
   component: PedidoView,
   head: () => ({
     meta: [
-      { title: "Resumen y pago â€” VISUALSKIN" },
+      { title: "Resumen y pago — VISUALSKIN" },
       { name: "robots", content: "noindex,nofollow" },
       { name: "referrer", content: "no-referrer" },
     ],
@@ -123,6 +123,7 @@ function PedidoView() {
   const [shopifyError, setShopifyError] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [legalChecked, setLegalChecked] = useState(false);
+  const [legalConfirmedThisVisit, setLegalConfirmedThisVisit] = useState(false);
   const [legalSubmitting, setLegalSubmitting] = useState(false);
   const [legalError, setLegalError] = useState<string | null>(null);
   const [legalAvailable, setLegalAvailable] = useState<boolean | null>(null);
@@ -175,7 +176,7 @@ function PedidoView() {
           });
         } catch (e) {
           if (!cancelled) {
-            setErrMsg(e instanceof Error ? e.message : "Token invÃ¡lido");
+            setErrMsg(e instanceof Error ? e.message : "Token inválido");
             setLoading(false);
             return;
           }
@@ -261,7 +262,12 @@ function PedidoView() {
       order.payment_status === "cancelled");
 
   useEffect(() => {
-    if (!sessionReady || !needsLegalPrompt) return;
+    if (!sessionReady || !order) return;
+    if (order.legal_accepted_at) {
+      setLegalAvailable(true);
+      return;
+    }
+    if (!needsLegalPrompt) return;
     let cancelled = false;
     (async () => {
       try {
@@ -274,7 +280,54 @@ function PedidoView() {
     return () => {
       cancelled = true;
     };
-  }, [sessionReady, needsLegalPrompt]);
+  }, [sessionReady, needsLegalPrompt, order?.legal_accepted_at]);
+
+  useEffect(() => {
+    setLegalChecked(false);
+    setLegalConfirmedThisVisit(false);
+    setLegalError(null);
+  }, [id]);
+
+  const handleLegalCheckedChange = useCallback(async (checked: boolean) => {
+    setLegalChecked(checked);
+    setLegalError(null);
+    if (!checked) {
+      setLegalConfirmedThisVisit(false);
+      return;
+    }
+    if (!order || legalSubmitting || legalSubmitLockRef.current) return;
+    if (order.legal_accepted_at) {
+      setLegalConfirmedThisVisit(true);
+      return;
+    }
+
+    legalSubmitLockRef.current = true;
+    setLegalSubmitting(true);
+    try {
+      const acceptance = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
+      if (!acceptance.accepted) {
+        setLegalError(acceptance.code === "documents_unavailable"
+          ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
+          : "Este pedido ya no admite registrar la aceptación.");
+        setLegalChecked(false);
+        return;
+      }
+      setOrder((current) => current ? {
+        ...current,
+        legal_accepted_at: acceptance.acceptedAt,
+        legal_acceptance_hash: acceptance.hash,
+      } : current);
+      setLegalConfirmedThisVisit(true);
+    } catch (error) {
+      setLegalError(error instanceof Error
+        ? error.message
+        : "No pudimos registrar la aceptación. Inténtalo nuevamente.");
+      setLegalChecked(false);
+    } finally {
+      setLegalSubmitting(false);
+      legalSubmitLockRef.current = false;
+    }
+  }, [order, legalSubmitting]);
 
   const handleShopifyCheckout = useCallback(async () => {
     if (!order || shopifyProcessing) return;
@@ -321,49 +374,30 @@ function PedidoView() {
 
   const handleMercadoPagoCheckout = useCallback(async () => {
     if (!order || processing || submitLockRef.current || legalSubmitLockRef.current || order.hasActiveAttempt) return;
-    if (!order.legal_accepted_at && !legalChecked) {
+    if (!legalConfirmedThisVisit || !order.legal_accepted_at) {
       setLegalError("Debes marcar la aceptación de las condiciones antes de continuar.");
       return;
     }
     submitLockRef.current = true;
-    legalSubmitLockRef.current = true;
     setProcessing(true);
-    setLegalSubmitting(!order.legal_accepted_at);
     setPayError(null);
     setLegalError(null);
     let redirecting = false;
-    let acceptanceCompleted = !!order.legal_accepted_at;
     try {
-      if (!acceptanceCompleted) {
-        const acceptance = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
-        if (!acceptance.accepted) {
-          setLegalError(acceptance.code === "documents_unavailable"
-            ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
-            : "Este pedido ya no admite registrar la aceptación.");
-          return;
-        }
-        acceptanceCompleted = true;
-      }
       const result = await createMercadoPagoCheckoutPro({ data: { orderId: order.id } });
       redirecting = true;
       window.location.assign(result.checkoutUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : "No pudimos abrir Mercado Pago.";
-      if (acceptanceCompleted) {
-        setPayError(message);
-        await loadOrderRef.current();
-      } else {
-        setLegalError(message);
-      }
+      setPayError(message);
+      await loadOrderRef.current();
     } finally {
       if (!redirecting) {
         setProcessing(false);
-        setLegalSubmitting(false);
         submitLockRef.current = false;
-        legalSubmitLockRef.current = false;
       }
     }
-  }, [order, processing, legalChecked]);
+  }, [order, processing, legalConfirmedThisVisit]);
 
   useEffect(() => {
     if (!sessionReady || !mpReturn || !returnPaymentId) return;
@@ -447,7 +481,8 @@ function PedidoView() {
   const legalAccepted = !!order.legal_accepted_at;
   const canRetry =
     (isFreshPending || order.canRetryPayment === true) &&
-    legalAccepted;
+    legalAccepted &&
+    legalConfirmedThisVisit;
   // Show "preparing new attempt" while the auto-unlock is still in-flight.
   const preparingRetry =
     (isRejected || isCancelled) &&
@@ -455,7 +490,6 @@ function PedidoView() {
     designLocked;
   const showLegalPrompt =
     customerComplete &&
-    !legalAccepted &&
     !isApproved &&
     !isFinalNoRetry &&
     !order.hasActiveAttempt &&
@@ -468,7 +502,7 @@ function PedidoView() {
     <section className="mx-auto max-w-5xl px-4 py-12">
       <div className="mb-8 text-center">
         <div className="inline-flex items-center gap-2 rounded-full border border-neon-blue/40 bg-neon-blue/10 px-4 py-1.5 text-xs text-neon-blue">
-          Pedido Â· {order.order_number}
+          Pedido · {order.order_number}
         </div>
         <h1 className="mt-4 font-display text-3xl font-bold md:text-4xl">Resumen y pago</h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -525,20 +559,20 @@ function PedidoView() {
           <h3 className="font-display text-lg font-semibold">Resumen</h3>
           <dl className="mt-4 space-y-2 text-sm">
             <Field k="Pack" v={packLabel} />
-            <Field k="Marca" v={order.brand ?? "â€”"} />
-            <Field k="Modelo" v={order.phone_model ?? "â€”"} />
+            <Field k="Marca" v={order.brand ?? "—"} />
+            <Field k="Modelo" v={order.phone_model ?? "—"} />
             {isCompletePack ? (
               <>
-                <Field k="Talla polera" v={order.garment_size ?? "â€”"} />
+                <Field k="Talla polera" v={order.garment_size ?? "—"} />
                 {order.garment_color && <Field k="Color polera" v={order.garment_color} />}
-                <Field k="Talla polerÃ³n" v={order.secondary_garment_size ?? "â€”"} />
+                <Field k="Talla polerón" v={order.secondary_garment_size ?? "—"} />
                 {order.secondary_garment_color && (
-                  <Field k="Color polerÃ³n" v={order.secondary_garment_color} />
+                  <Field k="Color polerón" v={order.secondary_garment_color} />
                 )}
               </>
             ) : (
               <>
-                {hasShirt && <Field k="Talla" v={order.garment_size ?? "â€”"} />}
+                {hasShirt && <Field k="Talla" v={order.garment_size ?? "—"} />}
                 {order.garment_color && <Field k="Color" v={order.garment_color} />}
               </>
             )}
@@ -593,7 +627,7 @@ function PedidoView() {
             {isProcessing && (
               <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center text-xs text-yellow-400">
                 <Clock className="mx-auto mb-1 h-5 w-5" />
-                Procesando pagoâ€¦
+                Procesando pago…
                 <div className="mt-1 text-[10px] text-yellow-400/70">
                   No cierres esta página mientras confirmamos la operación.
                 </div>
@@ -623,7 +657,7 @@ function PedidoView() {
             {preparingRetry && (
               <div className="rounded-lg border border-border bg-secondary p-3 text-center text-xs text-muted-foreground">
                 <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" />
-                Preparando un nuevo intentoâ€¦
+                Preparando un nuevo intento…
               </div>
             )}
 
@@ -656,14 +690,13 @@ function PedidoView() {
               <LegalAcceptanceCard
                 available={legalAvailable}
                 checked={legalChecked}
-                onCheckedChange={setLegalChecked}
+                onCheckedChange={(checked) => void handleLegalCheckedChange(checked)}
                 submitting={legalSubmitting}
                 error={legalError}
-                onSubmit={handleMercadoPagoCheckout}
               />
             )}
 
-            {legalAccepted && !isApproved && !isFinalNoRetry && (
+            {legalAccepted && legalConfirmedThisVisit && !isApproved && !isFinalNoRetry && (
               <div className="rounded-lg border border-neon-green/40 bg-neon-green/10 p-3 text-xs text-neon-green">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4" />
@@ -866,14 +899,12 @@ function LegalAcceptanceCard({
   onCheckedChange,
   submitting,
   error,
-  onSubmit,
 }: {
   available: boolean | null;
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   submitting: boolean;
   error: string | null;
-  onSubmit: () => void;
 }) {
   if (available === false) {
     return (
@@ -886,7 +917,6 @@ function LegalAcceptanceCard({
     );
   }
   const loading = available === null;
-  const disabled = !checked || submitting || loading;
   const linkCls =
     "inline-flex items-center gap-0.5 text-neon-blue underline underline-offset-2 hover:text-neon-blue/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue/50 rounded-sm";
   return (
@@ -933,27 +963,15 @@ function LegalAcceptanceCard({
           He leído y acepto los Términos y Condiciones y la Política de Cambios y
           Devoluciones. También declaro haber leído la Política de Privacidad.
         </span>
+        {submitting && (
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-neon-blue" />
+        )}
       </label>
       {error && (
         <p role="alert" className="mt-2 text-[11px] text-destructive">
           {error}
         </p>
       )}
-      <button
-        type="button"
-        onClick={onSubmit}
-        disabled={disabled}
-        aria-busy={submitting || undefined}
-        className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-neon-blue bg-neon-blue/10 px-4 py-2 text-xs font-medium text-neon-blue transition hover:bg-neon-blue/20 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {submitting ? (
-          <>
-            <Loader2 className="h-3 w-3 animate-spin" /> Registrando y abriendo Mercado Pago…
-          </>
-        ) : (
-          "Continuar al pago con Mercado Pago"
-        )}
-      </button>
     </div>
   );
 }

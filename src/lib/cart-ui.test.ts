@@ -78,20 +78,39 @@ test("aceptación legal y Checkout Pro ocurren en un único click ordenado", () 
     orderRoute.indexOf("const handleMercadoPagoCheckout"),
     orderRoute.indexOf("useEffect(() =>", orderRoute.indexOf("const handleMercadoPagoCheckout")),
   );
-  const acceptAt = route.indexOf("await acceptOrderLegalDocuments");
-  const checkoutAt = route.indexOf("await createMercadoPagoCheckoutPro");
-  assert.ok(acceptAt >= 0 && checkoutAt > acceptAt);
-  assert.match(route, /if \(!order\.legal_accepted_at && !legalChecked\)/);
-  assert.match(route, /if \(!acceptance\.accepted\)[\s\S]*?return;/);
+  const acceptanceRoute = orderRoute.slice(
+    orderRoute.indexOf("const handleLegalCheckedChange"),
+    orderRoute.indexOf("const handleShopifyCheckout"),
+  );
+  assert.match(acceptanceRoute, /await acceptOrderLegalDocuments/);
+  assert.match(acceptanceRoute, /if \(!acceptance\.accepted\)[\s\S]*?return;/);
   assert.match(route, /submitLockRef\.current = true/);
-  assert.match(route, /legalSubmitLockRef\.current = true/);
-  assert.match(orderRoute, /onSubmit=\{handleMercadoPagoCheckout\}/);
-  assert.doesNotMatch(orderRoute, /onSubmit=\{handleAcceptLegal\}/);
+  assert.match(acceptanceRoute, /legalSubmitLockRef\.current = true/);
+  assert.match(route, /if \(!legalConfirmedThisVisit \|\| !order\.legal_accepted_at\)/);
+  assert.match(route, /await createMercadoPagoCheckoutPro/);
+  assert.doesNotMatch(route, /acceptOrderLegalDocuments/);
+  assert.doesNotMatch(orderRoute, /Registrando y abriendo Mercado Pago/);
 });
 
 test("aceptación previa reintenta Checkout Pro sin exigir nuevamente checkbox", () => {
-  assert.match(orderRoute, /let acceptanceCompleted = !!order\.legal_accepted_at/);
-  assert.match(orderRoute, /if \(!acceptanceCompleted\) \{/);
-  assert.match(orderRoute, /await loadOrderRef\.current\(\)/);
+  const acceptanceRoute = orderRoute.slice(
+    orderRoute.indexOf("const handleLegalCheckedChange"),
+    orderRoute.indexOf("const handleShopifyCheckout"),
+  );
+  assert.match(acceptanceRoute, /if \(order\.legal_accepted_at\) \{[\s\S]*?setLegalConfirmedThisVisit\(true\);[\s\S]*?return;/);
+  assert.match(orderRoute, /legalAccepted &&\s*legalConfirmedThisVisit/);
   assert.match(orderRoute, /Continuar al pago con Mercado Pago/);
+});
+
+test("pedido muestra cabecera UTF-8 y nunca expone fulfillment new", () => {
+  assert.match(orderRoute, /Pedido · \{order\.order_number\}/);
+  assert.doesNotMatch(orderRoute, /Pedido Â/);
+  assert.doesNotMatch(orderRoute, /Producción:\s*new/);
+});
+
+test("pending muestra checkbox pero oculta pago hasta confirmación; approved oculta ambos", () => {
+  assert.match(orderRoute, /const showLegalPrompt =[\s\S]*?!isApproved/);
+  assert.match(orderRoute, /type="checkbox"/);
+  assert.match(orderRoute, /const canRetry =[\s\S]*?legalConfirmedThisVisit/);
+  assert.match(orderRoute, /\{canRetry && !order\.hasActiveAttempt/);
 });
