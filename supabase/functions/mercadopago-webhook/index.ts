@@ -1,3 +1,5 @@
+import { resolveMercadoPagoPreferenceId } from "../_shared/mercadopago-preference.ts";
+
 // Public Edge Function to receive Mercado Pago IPN/webhook notifications.
 // - Fail-closed configuration: MERCADOPAGO_ENV must be "test" or "production",
 //   and the matching Access Token + Webhook Secret must be present.
@@ -443,11 +445,6 @@ async function processPayment(
     const currencyId =
       typeof payment.currency_id === "string" ? payment.currency_id : null;
 
-    const preferenceId =
-      typeof (payment as any).preference_id === "string"
-        ? ((payment as any).preference_id as string)
-        : null;
-
     const externalReference =
       typeof payment.external_reference === "string"
         ? payment.external_reference
@@ -507,6 +504,29 @@ async function processPayment(
     } else {
       await markEventTransient(cfg, eventId, "invalid_order_reference");
       return "transient";
+    }
+
+    if (transactionAmount === null) {
+      await markEventTransient(cfg, eventId, "invalid_payment_amount");
+      return "transient";
+    }
+    let preferenceId = typeof payment.preference_id === "string" && payment.preference_id.trim()
+      ? payment.preference_id.trim()
+      : null;
+    const providerOrder = payment.order as Record<string, unknown> | null | undefined;
+    const hasMerchantOrderId =
+      (typeof providerOrder?.id === "string" && /^[0-9]+$/.test(providerOrder.id)) ||
+      (typeof providerOrder?.id === "number" && Number.isSafeInteger(providerOrder.id));
+    if (!preferenceId && hasMerchantOrderId) {
+      const preferenceResolution = await resolveMercadoPagoPreferenceId({
+        payment, paymentId: canonicalPaymentId, visualSkinOrderId: orderId,
+        transactionAmount, accessToken: cfg.accessToken, timeoutMs: MP_FETCH_TIMEOUT_MS,
+      });
+      if (!preferenceResolution.ok) {
+        await markEventTransient(cfg, eventId, preferenceResolution.code);
+        return "transient";
+      }
+      preferenceId = preferenceResolution.preferenceId;
     }
 
     // Validate the provider response against the canonical order before an

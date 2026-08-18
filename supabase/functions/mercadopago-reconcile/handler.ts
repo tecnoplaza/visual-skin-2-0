@@ -1,3 +1,5 @@
+import { resolveMercadoPagoPreferenceId } from "../_shared/mercadopago-preference.ts";
+
 // Handler for the internal Mercado Pago reconciler.
 // Manual-only, single-attempt mode. Importing this module has zero side
 // effects: no server, no fetch, no environment reads until handleRequest()
@@ -476,8 +478,10 @@ async function executeSingle(
     typeof payment.payment_type_id === "string"
       ? payment.payment_type_id
       : null;
-  const preferenceId =
-    typeof payment.preference_id === "string" ? payment.preference_id : null;
+  let preferenceId =
+    typeof payment.preference_id === "string" && payment.preference_id.trim()
+      ? payment.preference_id.trim()
+      : null;
 
   const rawCollector = payment.collector_id;
   let collectorId: string | null = null;
@@ -493,6 +497,31 @@ async function executeSingle(
   }
 
   const isCheckoutPro = candidate.payment_flow === "checkout_pro";
+  if (isCheckoutPro && !preferenceId) {
+    if (transactionAmount === null) {
+      counters.payload_invalid += 1;
+      return { kind: "ok", counters, stoppedReason: null };
+    }
+    const resolution = await resolveMercadoPagoPreferenceId({
+      payment,
+      paymentId: canonicalPaymentId,
+      visualSkinOrderId: candidate.order_id,
+      transactionAmount,
+      accessToken: cfg.accessToken,
+      timeoutMs: deps.mercadoPagoTimeoutMs,
+      fetchFn: deps.fetchFn,
+    });
+    if (!resolution.ok) {
+      if (resolution.kind === "transient") counters.deferred += 1;
+      else counters.payload_invalid += 1;
+      console.warn("[mp-reconcile] merchant_order_unresolved", {
+        attempt: candidate.id,
+        code: resolution.code,
+      });
+      return { kind: "ok", counters, stoppedReason: null };
+    }
+    preferenceId = resolution.preferenceId;
+  }
   const applied = await rpcApply(deps, cfg, {
     p_order_id: candidate.order_id,
     p_attempt_id: candidate.id,
