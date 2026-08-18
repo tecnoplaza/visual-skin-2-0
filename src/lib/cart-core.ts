@@ -12,8 +12,37 @@ export type CartOrder = {
   payment_status: string;
 };
 
-export type CartItem = OrderItem & { preview_url?: string | null };
+export type CartPreviewKind = "case" | "garment" | "secondary_garment";
+export type CartItemPreviewUrls = Partial<Record<CartPreviewKind, string | null>>;
+export type CartItem = OrderItem & {
+  preview_url?: string | null;
+  preview_urls?: CartItemPreviewUrls;
+};
 export type ActiveCart = { order: CartOrder; items: CartItem[] };
+
+export type CartPreviewSlot = {
+  kind: CartPreviewKind;
+  label: "Carcasa" | "Polera" | "Polerón";
+  url: string | null;
+};
+
+export function cartItemPreviewSlots(item: CartItem): CartPreviewSlot[] {
+  const urls = item.preview_urls ?? { case: item.preview_url ?? null };
+  const slots: CartPreviewSlot[] = [
+    { kind: "case", label: "Carcasa", url: urls.case ?? null },
+  ];
+  if (item.pack_type === "carcasa+polera") {
+    slots.push({ kind: "garment", label: "Polera", url: urls.garment ?? null });
+  } else if (item.pack_type === "carcasa+poleron") {
+    slots.push({ kind: "garment", label: "Polerón", url: urls.garment ?? null });
+  } else if (item.pack_type === "carcasa+polera+poleron") {
+    slots.push(
+      { kind: "garment", label: "Polera", url: urls.garment ?? null },
+      { kind: "secondary_garment", label: "Polerón", url: urls.secondary_garment ?? null },
+    );
+  }
+  return slots;
+}
 
 export function activeCartItems(cart: ActiveCart | null | undefined): CartItem[] {
   return (cart?.items ?? []).filter((item) => item.is_active);

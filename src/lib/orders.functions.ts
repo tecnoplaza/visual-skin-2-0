@@ -1689,18 +1689,30 @@ export const getActiveCart = createServerFn({ method: "GET" })
     const { data: assets } = itemIds.length > 0
       ? await supabaseAdmin.from("design_assets")
           .select("order_item_id,file_path,kind")
-          .eq("order_id", orderId).in("order_item_id", itemIds).eq("kind", "case")
+          .eq("order_id", orderId)
+          .in("order_item_id", itemIds)
+          .in("kind", ["case", "garment", "secondary_garment"])
       : { data: [] };
     const previews = new Map<string, string>();
     await Promise.all((assets ?? []).map(async (asset) => {
-      if (!asset.order_item_id || !asset.file_path || previews.has(asset.order_item_id)) return;
+      if (!asset.order_item_id || !asset.file_path || !asset.kind) return;
+      const previewKey = `${asset.order_item_id}:${asset.kind}`;
+      if (previews.has(previewKey)) return;
       const { data: signed } = await supabaseAdmin.storage
         .from(DESIGN_BUCKET).createSignedUrl(asset.file_path, 10 * 60);
-      if (signed?.signedUrl) previews.set(asset.order_item_id, signed.signedUrl);
+      if (signed?.signedUrl) previews.set(previewKey, signed.signedUrl);
     }));
     return {
       order,
-      items: items.map((item) => ({ ...item, preview_url: previews.get(item.id) ?? null })),
+      items: items.map((item) => ({
+        ...item,
+        preview_url: previews.get(`${item.id}:case`) ?? null,
+        preview_urls: {
+          case: previews.get(`${item.id}:case`) ?? null,
+          garment: previews.get(`${item.id}:garment`) ?? null,
+          secondary_garment: previews.get(`${item.id}:secondary_garment`) ?? null,
+        },
+      })),
     };
   });
 

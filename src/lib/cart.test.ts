@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activeCartItems, canContinueCart, cartItemCount, cartWriteMode, isMultiItemPaymentBlocked, type ActiveCart } from "./cart-core.ts";
+import { activeCartItems, canContinueCart, cartItemCount, cartItemPreviewSlots, cartWriteMode, isMultiItemPaymentBlocked, type ActiveCart, type CartItem } from "./cart-core.ts";
 import type { OrderItem } from "./order-items.ts";
 
 function item(id: string, status = "ready"): OrderItem {
@@ -45,4 +45,34 @@ test("segundo producto conserva orderId y usa add_item", () => {
   assert.equal(cartWriteMode(null), "create_order");
   assert.equal(cartWriteMode(active), "add_item");
   assert.equal(active.order.id, "order");
+});
+
+function previewItem(id: string, packType: OrderItem["pack_type"], urls: CartItem["preview_urls"]): CartItem {
+  return { ...item(id), pack_type: packType, preview_urls: urls };
+}
+
+test("solo carcasa muestra una preview", () => {
+  assert.deepEqual(cartItemPreviewSlots(previewItem("1", "carcasa", { case: "case-1" })).map((p) => p.kind), ["case"]);
+});
+test("carcasa con polera muestra case y garment", () => {
+  const slots = cartItemPreviewSlots(previewItem("1", "carcasa+polera", { case: "case-1", garment: "shirt-1" }));
+  assert.deepEqual(slots.map((p) => [p.kind, p.label]), [["case", "Carcasa"], ["garment", "Polera"]]);
+});
+test("carcasa con polerón muestra case y garment etiquetado como polerón", () => {
+  const slots = cartItemPreviewSlots(previewItem("1", "carcasa+poleron", { case: "case-1", garment: "hoodie-1" }));
+  assert.deepEqual(slots.map((p) => [p.kind, p.label]), [["case", "Carcasa"], ["garment", "Polerón"]]);
+});
+test("pack completo muestra las tres piezas", () => {
+  const slots = cartItemPreviewSlots(previewItem("1", "carcasa+polera+poleron", { case: "case-1", garment: "shirt-1", secondary_garment: "hoodie-1" }));
+  assert.deepEqual(slots.map((p) => p.kind), ["case", "garment", "secondary_garment"]);
+});
+test("dos items del mismo pedido conservan sus propias previews", () => {
+  const first = cartItemPreviewSlots(previewItem("1", "carcasa+polera", { case: "case-1", garment: "shirt-1" }));
+  const second = cartItemPreviewSlots(previewItem("2", "carcasa+poleron", { case: "case-2", garment: "hoodie-2" }));
+  assert.deepEqual(first.map((p) => p.url), ["case-1", "shirt-1"]);
+  assert.deepEqual(second.map((p) => p.url), ["case-2", "hoodie-2"]);
+});
+test("una preview faltante conserva las demás y produce placeholder", () => {
+  const slots = cartItemPreviewSlots(previewItem("1", "carcasa+polera+poleron", { case: "case-1", secondary_garment: "hoodie-1" }));
+  assert.deepEqual(slots.map((p) => p.url), ["case-1", null, "hoodie-1"]);
 });

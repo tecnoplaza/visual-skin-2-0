@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Loader2, Pencil, Plus, ShoppingBag, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { activeCartItems, activeCartQueryOptions, canContinueCart, cartPackLabel, designStatusLabel, CART_QUERY_KEY } from "@/lib/cart";
+import { activeCartItems, activeCartQueryOptions, canContinueCart, cartItemPreviewSlots, cartPackLabel, designStatusLabel, CART_QUERY_KEY } from "@/lib/cart";
 import { getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 
@@ -97,10 +97,24 @@ function CartPage() {
         <section id="productos" className="space-y-4">
           {items.map((item, index) => {
             const discount = item.discount_amount;
+            const previews = cartItemPreviewSlots(item);
             return (
               <article key={item.id} className="rounded-2xl border border-border bg-card p-5">
                 <div className="flex flex-col gap-5 sm:flex-row sm:justify-between">
-                  {item.preview_url && <img src={item.preview_url} alt={`Diseño del producto ${index + 1}`} className="h-28 w-full rounded-xl border border-border object-contain sm:w-28" />}
+                  <div className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"} sm:w-auto`}>
+                    {previews.map((preview) => (
+                      <figure key={preview.kind} className="min-w-0">
+                        <div className="flex h-24 min-w-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-background sm:h-28 sm:w-24">
+                          {preview.url ? (
+                            <img src={preview.url} alt={`${preview.label} del producto ${index + 1}`} className="h-full w-full object-contain p-1.5" />
+                          ) : (
+                            <div className="px-2 text-center text-[10px] leading-tight text-muted-foreground">Preview no disponible</div>
+                          )}
+                        </div>
+                        <figcaption className="mt-1 text-center text-[10px] font-medium text-muted-foreground">{preview.label}</figcaption>
+                      </figure>
+                    ))}
+                  </div>
                   <div className="min-w-0 space-y-2">
                     <p className="text-xs text-muted-foreground">Producto {index + 1}</p>
                     <h2 className="font-display text-xl font-semibold">{cartPackLabel(item.pack_type)}</h2>

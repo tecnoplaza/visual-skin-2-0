@@ -31,3 +31,13 @@ test("Checkout Pro usa el snapshot canónico y admite carritos multi-item", () =
   assert.match(source, /items: claimed\.lines/);
   assert.doesNotMatch(source, /activeItemCount/);
 });
+
+test("previews del carrito quedan aisladas por order_item_id y kind", () => {
+  const start = orders.indexOf("export const getActiveCart");
+  const end = orders.indexOf("export const updateOrderCustomerShipping", start);
+  const source = orders.slice(start, end);
+  assert.match(source, /\.in\("order_item_id", itemIds\)/);
+  assert.match(source, /`\$\{asset\.order_item_id\}:\$\{asset\.kind\}`/);
+  assert.match(source, /createSignedUrl\(asset\.file_path, 10 \* 60\)/);
+  assert.doesNotMatch(source, /\.eq\("kind", "case"\)/);
+});
