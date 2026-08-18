@@ -14,6 +14,7 @@ import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { activeCartQueryOptions, cartWriteMode, CART_QUERY_KEY } from "@/lib/cart";
 import GarmentDesignCanvas, { type GarmentCanvasRow } from "@/components/personalizador/GarmentDesignCanvas";
 import { isValidGarmentPrintArea, type GarmentPrintArea } from "@/lib/garment-model";
+import { toast } from "sonner";
 
 const CaseCanvasKonva = lazy(() => import("@/components/personalizador/CaseCanvasKonva"));
 
@@ -1306,131 +1307,22 @@ function MagicEraserButton({
   );
 }
 
-type CustomerData = {
-  name: string;
-  phone: string;
-  email: string;
-  address: string;
-  comuna: string;
-  region: string;
-  notes: string;
-};
-
 function CheckoutDialog({
   onClose,
   onSubmit,
-  additionalItem,
 }: {
   onClose: () => void;
-  onSubmit: (data: CustomerData) => Promise<void>;
+  onSubmit: () => Promise<void>;
   additionalItem: boolean;
 }) {
-  const [form, setForm] = useState<CustomerData>({
-    name: "",
-    phone: "",
-    email: "",
-    address: "",
-    comuna: "",
-    region: "",
-    notes: "",
-  });
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const set = (k: keyof CustomerData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr(null);
-    setBusy(true);
-    try {
-      await onSubmit(form);
-    } catch (e2) {
-      setErr(e2 instanceof Error ? e2.message : "No se pudo crear el pedido");
-      setBusy(false);
-    }
-  };
-
-  const input = "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm";
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm">
-      <form
-        onSubmit={submit}
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="font-display text-xl font-semibold">Agregar producto</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              El producto se agregará a tu carrito. Completarás los datos de envío cuando termines.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            Cerrar
-          </button>
-        </div>
-
-        {!additionalItem && <div className="mt-5 grid gap-3">
-          <label className="grid gap-1 text-xs">
-            <span className="text-muted-foreground">Nombre completo *</span>
-            <input required className={input} value={form.name} onChange={set("name")} />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">Teléfono *</span>
-              <input required className={input} value={form.phone} onChange={set("phone")} />
-            </label>
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">Email *</span>
-              <input type="email" required className={input} value={form.email} onChange={set("email")} />
-            </label>
-          </div>
-          <label className="grid gap-1 text-xs">
-            <span className="text-muted-foreground">Dirección *</span>
-            <input required className={input} value={form.address} onChange={set("address")} />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">Comuna *</span>
-              <input required className={input} value={form.comuna} onChange={set("comuna")} />
-            </label>
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">Región *</span>
-              <input required className={input} value={form.region} onChange={set("region")} />
-            </label>
-          </div>
-          <label className="grid gap-1 text-xs">
-            <span className="text-muted-foreground">Observaciones</span>
-            <textarea rows={3} className={input} value={form.notes} onChange={set("notes")} />
-          </label>
-        </div>}
-
-        {err && <p className="mt-3 text-xs text-destructive">{err}</p>}
-
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border px-4 py-2 text-sm"
-            disabled={busy}
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-60"
-          >
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Agregar al carrito
-          </button>
-        </div>
-      </form>
-    </div>
-  );
+  const startedRef = useRef(false);
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void onSubmit().catch((error) => {
+      toast.error(error instanceof Error ? error.message : "No se pudo agregar el producto");
+      onClose();
+    });
+  }, [onClose, onSubmit]);
+  return null;
 }

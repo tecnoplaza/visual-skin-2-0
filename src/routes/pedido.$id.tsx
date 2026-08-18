@@ -276,34 +276,6 @@ function PedidoView() {
     };
   }, [sessionReady, needsLegalPrompt]);
 
-  const handleAcceptLegal = useCallback(async () => {
-    if (!order) return;
-    if (legalSubmitLockRef.current) return;
-    legalSubmitLockRef.current = true;
-    setLegalSubmitting(true);
-    setLegalError(null);
-    try {
-      const r = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
-      if (!r.accepted) {
-        setLegalError(
-          r.code === "documents_unavailable"
-            ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
-            : "Este pedido ya no admite registrar la aceptación.",
-        );
-        return;
-      }
-      await loadOrder();
-    } catch (e) {
-      setLegalError(
-        e instanceof Error ? e.message : "No se pudo registrar la aceptación",
-      );
-    } finally {
-      setLegalSubmitting(false);
-      legalSubmitLockRef.current = false;
-    }
-  }, [order, loadOrder]);
-
-
   const handleShopifyCheckout = useCallback(async () => {
     if (!order || shopifyProcessing) return;
     if (!order.legal_accepted_at) {
@@ -348,19 +320,50 @@ function PedidoView() {
   }, [order, shopifyProcessing]);
 
   const handleMercadoPagoCheckout = useCallback(async () => {
-    if (!order || processing || submitLockRef.current || order.hasActiveAttempt) return;
+    if (!order || processing || submitLockRef.current || legalSubmitLockRef.current || order.hasActiveAttempt) return;
+    if (!order.legal_accepted_at && !legalChecked) {
+      setLegalError("Debes marcar la aceptación de las condiciones antes de continuar.");
+      return;
+    }
     submitLockRef.current = true;
+    legalSubmitLockRef.current = true;
     setProcessing(true);
+    setLegalSubmitting(!order.legal_accepted_at);
     setPayError(null);
+    setLegalError(null);
+    let redirecting = false;
+    let acceptanceCompleted = !!order.legal_accepted_at;
     try {
+      if (!acceptanceCompleted) {
+        const acceptance = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
+        if (!acceptance.accepted) {
+          setLegalError(acceptance.code === "documents_unavailable"
+            ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
+            : "Este pedido ya no admite registrar la aceptación.");
+          return;
+        }
+        acceptanceCompleted = true;
+      }
       const result = await createMercadoPagoCheckoutPro({ data: { orderId: order.id } });
+      redirecting = true;
       window.location.assign(result.checkoutUrl);
     } catch (error) {
-      setPayError(error instanceof Error ? error.message : "No pudimos abrir Mercado Pago.");
-      setProcessing(false);
-      submitLockRef.current = false;
+      const message = error instanceof Error ? error.message : "No pudimos abrir Mercado Pago.";
+      if (acceptanceCompleted) {
+        setPayError(message);
+        await loadOrderRef.current();
+      } else {
+        setLegalError(message);
+      }
+    } finally {
+      if (!redirecting) {
+        setProcessing(false);
+        setLegalSubmitting(false);
+        submitLockRef.current = false;
+        legalSubmitLockRef.current = false;
+      }
     }
-  }, [order, processing]);
+  }, [order, processing, legalChecked]);
 
   useEffect(() => {
     if (!sessionReady || !mpReturn || !returnPaymentId) return;
@@ -656,7 +659,7 @@ function PedidoView() {
                 onCheckedChange={setLegalChecked}
                 submitting={legalSubmitting}
                 error={legalError}
-                onSubmit={handleAcceptLegal}
+                onSubmit={handleMercadoPagoCheckout}
               />
             )}
 
@@ -686,7 +689,7 @@ function PedidoView() {
                   onClick={() => void handleMercadoPagoCheckout()}
                   className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-6 py-3 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">
                   {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-                  {processing ? "Abriendo Mercado Pago…" : "Pagar con Mercado Pago"}
+                  {processing ? "Abriendo Mercado Pago…" : "Continuar al pago con Mercado Pago"}
                 </button>
               </div>
             )}
@@ -945,10 +948,10 @@ function LegalAcceptanceCard({
       >
         {submitting ? (
           <>
-            <Loader2 className="h-3 w-3 animate-spin" /> Registrando aceptación…
+            <Loader2 className="h-3 w-3 animate-spin" /> Registrando y abriendo Mercado Pago…
           </>
         ) : (
-          "Aceptar y continuar al pago"
+          "Continuar al pago con Mercado Pago"
         )}
       </button>
     </div>

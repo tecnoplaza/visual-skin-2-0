@@ -49,3 +49,33 @@ test("resumen y pago representa todos los order_items activos", () => {
   assert.match(orderRoute, /activeCartQuery\.refetch\(\)/);
   assert.doesNotMatch(orderRoute, /src=\{order\.case_design_url\}/);
 });
+
+test("personalizador agrega primer y siguientes productos sin modal informativo", () => {
+  assert.doesNotMatch(customizer, /Completarás los datos de envío cuando termines/);
+  assert.match(customizer, /void onSubmit\(\)\.catch/);
+  assert.match(customizer, /orderId = activeCart\.order\.id/);
+  assert.match(customizer, /navigate\(\{ to: "\/carrito"/);
+});
+
+test("aceptación legal y Checkout Pro ocurren en un único click ordenado", () => {
+  const route = orderRoute.slice(
+    orderRoute.indexOf("const handleMercadoPagoCheckout"),
+    orderRoute.indexOf("useEffect(() =>", orderRoute.indexOf("const handleMercadoPagoCheckout")),
+  );
+  const acceptAt = route.indexOf("await acceptOrderLegalDocuments");
+  const checkoutAt = route.indexOf("await createMercadoPagoCheckoutPro");
+  assert.ok(acceptAt >= 0 && checkoutAt > acceptAt);
+  assert.match(route, /if \(!order\.legal_accepted_at && !legalChecked\)/);
+  assert.match(route, /if \(!acceptance\.accepted\)[\s\S]*?return;/);
+  assert.match(route, /submitLockRef\.current = true/);
+  assert.match(route, /legalSubmitLockRef\.current = true/);
+  assert.match(orderRoute, /onSubmit=\{handleMercadoPagoCheckout\}/);
+  assert.doesNotMatch(orderRoute, /onSubmit=\{handleAcceptLegal\}/);
+});
+
+test("aceptación previa reintenta Checkout Pro sin exigir nuevamente checkbox", () => {
+  assert.match(orderRoute, /let acceptanceCompleted = !!order\.legal_accepted_at/);
+  assert.match(orderRoute, /if \(!acceptanceCompleted\) \{/);
+  assert.match(orderRoute, /await loadOrderRef\.current\(\)/);
+  assert.match(orderRoute, /Continuar al pago con Mercado Pago/);
+});
