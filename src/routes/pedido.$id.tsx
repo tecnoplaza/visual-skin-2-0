@@ -1,7 +1,16 @@
 ﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, AlertTriangle, XCircle, Clock, FileText, ExternalLink, Lock } from "lucide-react";
+import {
+  CheckCircle2,
+  Loader2,
+  AlertTriangle,
+  XCircle,
+  Clock,
+  FileText,
+  ExternalLink,
+  Lock,
+} from "lucide-react";
 import {
   exchangeOrderToken,
   getOrderBySession,
@@ -16,7 +25,13 @@ import {
 } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { productionDisplayLabel } from "@/lib/production-display";
-import { activeCartItems, activeCartQueryOptions, cartItemPreviewSlots, cartPackLabel, type CartItem } from "@/lib/cart";
+import {
+  activeCartItems,
+  activeCartQueryOptions,
+  cartItemPreviewSlots,
+  cartPackLabel,
+  type CartItem,
+} from "@/lib/cart";
 
 // Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
 // implemented below as a temporary fallback and can be re-enabled deliberately.
@@ -38,20 +53,8 @@ type Order = {
   total_amount: number;
   currency: string;
   payment_environment: "test" | "production";
-  payment_status:
-    | "pending"
-    | "approved"
-    | "rejected"
-    | "cancelled"
-    | "refunded"
-    | "charged_back";
-  fulfillment_status:
-    | "new"
-    | "in_production"
-    | "ready"
-    | "shipped"
-    | "completed"
-    | "cancelled";
+  payment_status: "pending" | "approved" | "rejected" | "cancelled" | "refunded" | "charged_back";
+  fulfillment_status: "new" | "in_production" | "ready" | "shipped" | "completed" | "cancelled";
   design_status?: "pending" | "uploading" | "ready" | "locked" | "failed";
   mp_payment_id: string | null;
   customer_name: string | null;
@@ -69,17 +72,11 @@ type Order = {
   notes: string | null;
   created_at: string;
   hasActiveAttempt?: boolean;
-  activeAttemptStatus?:
-    | "processing"
-    | "pending"
-    | "awaiting_reconciliation"
-    | null;
+  activeAttemptStatus?: "processing" | "pending" | "awaiting_reconciliation" | null;
   canRetryPayment?: boolean;
   legal_accepted_at?: string | null;
   legal_acceptance_hash?: string | null;
 };
-
-
 
 type Search = {
   token?: string;
@@ -92,8 +89,14 @@ export const Route = createFileRoute("/pedido/$id")({
   ssr: false,
   validateSearch: (s: Record<string, unknown>): Search => ({
     token: typeof s.token === "string" ? s.token : undefined,
-    mp_return: s.mp_return === "success" || s.mp_return === "pending" || s.mp_return === "failure" ? s.mp_return : undefined,
-    payment_id: typeof s.payment_id === "string" && /^[0-9]{1,30}$/.test(s.payment_id) ? s.payment_id : undefined,
+    mp_return:
+      s.mp_return === "success" || s.mp_return === "pending" || s.mp_return === "failure"
+        ? s.mp_return
+        : undefined,
+    payment_id:
+      typeof s.payment_id === "string" && /^[0-9]{1,30}$/.test(s.payment_id)
+        ? s.payment_id
+        : undefined,
   }),
   component: PedidoView,
   head: () => ({
@@ -136,7 +139,6 @@ function PedidoView() {
   // status we unlocked for, so we never re-issue an unlock in a loop.
   const unlockInFlightRef = useRef(false);
   const unlockedForRef = useRef<string | null>(null);
-
 
   // ---- Load order via cookie session ----
   const loadOrder = useCallback(async () => {
@@ -203,9 +205,7 @@ function PedidoView() {
   // ---- Poll while active/awaiting_reconciliation ----
   useEffect(() => {
     if (!order || !sessionReady) return;
-    const shouldPoll =
-      order.payment_status === "pending" ||
-      order.hasActiveAttempt === true;
+    const shouldPoll = order.payment_status === "pending" || order.hasActiveAttempt === true;
     if (!shouldPoll) return;
     const iv = setInterval(async () => {
       try {
@@ -229,8 +229,7 @@ function PedidoView() {
   useEffect(() => {
     if (!order || !sessionReady) return;
     const needsUnlock =
-      (order.payment_status === "rejected" ||
-        order.payment_status === "cancelled") &&
+      (order.payment_status === "rejected" || order.payment_status === "cancelled") &&
       order.design_status === "locked" &&
       !order.hasActiveAttempt;
     if (!needsUnlock) return;
@@ -288,46 +287,57 @@ function PedidoView() {
     setLegalError(null);
   }, [id]);
 
-  const handleLegalCheckedChange = useCallback(async (checked: boolean) => {
-    setLegalChecked(checked);
-    setLegalError(null);
-    if (!checked) {
-      setLegalConfirmedThisVisit(false);
-      return;
-    }
-    if (!order || legalSubmitting || legalSubmitLockRef.current) return;
-    if (order.legal_accepted_at) {
-      setLegalConfirmedThisVisit(true);
-      return;
-    }
-
-    legalSubmitLockRef.current = true;
-    setLegalSubmitting(true);
-    try {
-      const acceptance = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
-      if (!acceptance.accepted) {
-        setLegalError(acceptance.code === "documents_unavailable"
-          ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
-          : "Este pedido ya no admite registrar la aceptación.");
-        setLegalChecked(false);
+  const handleLegalCheckedChange = useCallback(
+    async (checked: boolean) => {
+      setLegalChecked(checked);
+      setLegalError(null);
+      if (!checked) {
+        setLegalConfirmedThisVisit(false);
         return;
       }
-      setOrder((current) => current ? {
-        ...current,
-        legal_accepted_at: acceptance.acceptedAt,
-        legal_acceptance_hash: acceptance.hash,
-      } : current);
-      setLegalConfirmedThisVisit(true);
-    } catch (error) {
-      setLegalError(error instanceof Error
-        ? error.message
-        : "No pudimos registrar la aceptación. Inténtalo nuevamente.");
-      setLegalChecked(false);
-    } finally {
-      setLegalSubmitting(false);
-      legalSubmitLockRef.current = false;
-    }
-  }, [order, legalSubmitting]);
+      if (!order || legalSubmitting || legalSubmitLockRef.current) return;
+      if (order.legal_accepted_at) {
+        setLegalConfirmedThisVisit(true);
+        return;
+      }
+
+      legalSubmitLockRef.current = true;
+      setLegalSubmitting(true);
+      try {
+        const acceptance = await acceptOrderLegalDocuments({ data: { orderId: order.id } });
+        if (!acceptance.accepted) {
+          setLegalError(
+            acceptance.code === "documents_unavailable"
+              ? "Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde."
+              : "Este pedido ya no admite registrar la aceptación.",
+          );
+          setLegalChecked(false);
+          return;
+        }
+        setOrder((current) =>
+          current
+            ? {
+                ...current,
+                legal_accepted_at: acceptance.acceptedAt,
+                legal_acceptance_hash: acceptance.hash,
+              }
+            : current,
+        );
+        setLegalConfirmedThisVisit(true);
+      } catch (error) {
+        setLegalError(
+          error instanceof Error
+            ? error.message
+            : "No pudimos registrar la aceptación. Inténtalo nuevamente.",
+        );
+        setLegalChecked(false);
+      } finally {
+        setLegalSubmitting(false);
+        legalSubmitLockRef.current = false;
+      }
+    },
+    [order, legalSubmitting],
+  );
 
   const handleShopifyCheckout = useCallback(async () => {
     if (!order || shopifyProcessing) return;
@@ -373,7 +383,14 @@ function PedidoView() {
   }, [order, shopifyProcessing]);
 
   const handleMercadoPagoCheckout = useCallback(async () => {
-    if (!order || processing || submitLockRef.current || legalSubmitLockRef.current || order.hasActiveAttempt) return;
+    if (
+      !order ||
+      processing ||
+      submitLockRef.current ||
+      legalSubmitLockRef.current ||
+      order.hasActiveAttempt
+    )
+      return;
     if (!legalConfirmedThisVisit || !order.legal_accepted_at) {
       setLegalError("Debes marcar la aceptación de las condiciones antes de continuar.");
       return;
@@ -408,10 +425,14 @@ function PedidoView() {
     setPayError(null);
     void (async () => {
       try {
-        await reconcileMercadoPagoCheckoutProReturn({ data: { orderId: id, paymentId: returnPaymentId } });
+        await reconcileMercadoPagoCheckoutProReturn({
+          data: { orderId: id, paymentId: returnPaymentId },
+        });
         await loadOrderRef.current();
       } catch (error) {
-        setPayError(error instanceof Error ? error.message : "No pudimos verificar el pago todavía.");
+        setPayError(
+          error instanceof Error ? error.message : "No pudimos verificar el pago todavía.",
+        );
       } finally {
         setProcessing(false);
       }
@@ -458,14 +479,11 @@ function PedidoView() {
   const isFinalNoRetry =
     order.payment_status === "refunded" || order.payment_status === "charged_back";
   const activeStatus = order.activeAttemptStatus ?? null;
-  const isProcessing =
-    !!order.hasActiveAttempt && activeStatus === "processing";
+  const isProcessing = !!order.hasActiveAttempt && activeStatus === "processing";
   const isAwaitingReconciliation =
     !!order.hasActiveAttempt && activeStatus === "awaiting_reconciliation";
-  const isAwaitingPending =
-    !!order.hasActiveAttempt && activeStatus === "pending";
-  const designReady =
-    order.design_status === "ready" || order.design_status === undefined;
+  const isAwaitingPending = !!order.hasActiveAttempt && activeStatus === "pending";
+  const designReady = order.design_status === "ready" || order.design_status === undefined;
   const designLocked = order.design_status === "locked";
   const customerComplete =
     !!order.customer_name?.trim() &&
@@ -475,19 +493,13 @@ function PedidoView() {
     !!order.shipping_address?.comuna?.trim() &&
     !!order.shipping_address?.region?.trim();
   // Fresh pending order (no attempts yet, design ready) â€” canonical first pay.
-  const isFreshPending =
-    isPending && !order.hasActiveAttempt && designReady;
+  const isFreshPending = isPending && !order.hasActiveAttempt && designReady;
   // Server is the single source of truth for retry after rejected/cancelled.
   const legalAccepted = !!order.legal_accepted_at;
   const canRetry =
-    (isFreshPending || order.canRetryPayment === true) &&
-    legalAccepted &&
-    legalConfirmedThisVisit;
+    (isFreshPending || order.canRetryPayment === true) && legalAccepted && legalConfirmedThisVisit;
   // Show "preparing new attempt" while the auto-unlock is still in-flight.
-  const preparingRetry =
-    (isRejected || isCancelled) &&
-    !order.hasActiveAttempt &&
-    designLocked;
+  const preparingRetry = (isRejected || isCancelled) && !order.hasActiveAttempt && designLocked;
   const showLegalPrompt =
     customerComplete &&
     !isApproved &&
@@ -495,8 +507,6 @@ function PedidoView() {
     !order.hasActiveAttempt &&
     designReady &&
     (isPending || isRejected || isCancelled);
-
-
 
   return (
     <section className="mx-auto max-w-5xl px-4 py-12">
@@ -516,7 +526,9 @@ function PedidoView() {
             <div className="rounded-2xl border border-border bg-card p-6">
               <h2 className="font-display text-lg font-semibold">Productos del pedido</h2>
               <div className="mt-4 space-y-3">
-                {cartItems.map((item, index) => <OrderItemSummaryCard key={item.id} item={item} index={index} />)}
+                {cartItems.map((item, index) => (
+                  <OrderItemSummaryCard key={item.id} item={item} index={index} />
+                ))}
               </div>
             </div>
           )}
@@ -532,7 +544,11 @@ function PedidoView() {
                   <Field k="Comuna" v={order.shipping_address!.comuna!} />
                   <Field k="Región" v={order.shipping_address!.region!} />
                 </dl>
-                {order.shipping_address?.notes && <p className="mt-4 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground"><b className="text-foreground">Observaciones:</b> {order.shipping_address.notes}</p>}
+                {order.shipping_address?.notes && (
+                  <p className="mt-4 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
+                    <b className="text-foreground">Observaciones:</b> {order.shipping_address.notes}
+                  </p>
+                )}
               </>
             ) : (
               <CustomerShippingForm
@@ -545,7 +561,11 @@ function PedidoView() {
                     await updateOrderCustomerShipping({ data: { orderId: order.id, customer } });
                     await loadOrder();
                   } catch (error) {
-                    setCustomerError(error instanceof Error ? error.message : "No se pudieron guardar los datos de envío");
+                    setCustomerError(
+                      error instanceof Error
+                        ? error.message
+                        : "No se pudieron guardar los datos de envío",
+                    );
                   } finally {
                     setCustomerSaving(false);
                   }
@@ -582,9 +602,17 @@ function PedidoView() {
             {order.discount_amount > 0 && (
               <Row k="Descuento" v={`-$${order.discount_amount.toLocaleString("es-CL")}`} />
             )}
-            <Row k="Despacho" v={order.shipping_amount === 0 ? "Gratis" : `$${order.shipping_amount.toLocaleString("es-CL")}`} />
+            <Row
+              k="Despacho"
+              v={
+                order.shipping_amount === 0
+                  ? "Gratis"
+                  : `$${order.shipping_amount.toLocaleString("es-CL")}`
+              }
+            />
             <div className="pt-1 text-[10px] leading-relaxed text-muted-foreground/70">
-              Envíos a todo Chile. El plazo de transporte depende del proveedor logístico y de la ciudad de destino.
+              Envíos a todo Chile. El plazo de transporte depende del proveedor logístico y de la
+              ciudad de destino.
             </div>
           </div>
           <div className="mt-4 flex items-baseline justify-between border-t border-border pt-4">
@@ -649,7 +677,8 @@ function PedidoView() {
                 <Clock className="mx-auto mb-1 h-5 w-5" />
                 Estamos verificando tu pago
                 <div className="mt-1 text-[10px] text-yellow-400/70">
-                  No realices otro pago. Actualizaremos el estado cuando Mercado Pago confirme la operación.
+                  No realices otro pago. Actualizaremos el estado cuando Mercado Pago confirme la
+                  operación.
                 </div>
               </div>
             )}
@@ -664,7 +693,8 @@ function PedidoView() {
             {!order.hasActiveAttempt && !preparingRetry && isRejected && designReady && (
               <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center text-xs text-destructive">
                 <XCircle className="mx-auto mb-1 h-5 w-5" />
-                El pago fue rechazado. Puedes intentarlo nuevamente con otra tarjeta o revisando los datos ingresados.
+                El pago fue rechazado. Puedes intentarlo nuevamente con otra tarjeta o revisando los
+                datos ingresados.
               </div>
             )}
             {!order.hasActiveAttempt && !preparingRetry && isCancelled && designReady && (
@@ -712,16 +742,27 @@ function PedidoView() {
             {canRetry && !order.hasActiveAttempt && !preparingRetry && (
               <div className="rounded-2xl border border-neon-blue/40 bg-neon-blue/10 p-5">
                 <div className="text-center">
-                  <div className="text-sm font-semibold text-foreground">Pago seguro con Mercado Pago</div>
+                  <div className="text-sm font-semibold text-foreground">
+                    Pago seguro con Mercado Pago
+                  </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Serás dirigido a Mercado Pago para completar el pago de forma segura.
                   </p>
                 </div>
-                {payError && <p className="mt-4 text-center text-xs text-destructive">{payError}</p>}
-                <button type="button" disabled={processing}
+                {payError && (
+                  <p className="mt-4 text-center text-xs text-destructive">{payError}</p>
+                )}
+                <button
+                  type="button"
+                  disabled={processing}
                   onClick={() => void handleMercadoPagoCheckout()}
-                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-6 py-3 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">
-                  {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-6 py-3 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {processing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Lock className="h-4 w-4" />
+                  )}
                   {processing ? "Abriendo Mercado Pago…" : "Continuar al pago con Mercado Pago"}
                 </button>
               </div>
@@ -735,8 +776,8 @@ function PedidoView() {
                     Pago seguro con Shopify
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Al continuar serás enviado al checkout seguro de Shopify,
-                    donde podrás ingresar los datos de tu tarjeta.
+                    Al continuar serás enviado al checkout seguro de Shopify, donde podrás ingresar
+                    los datos de tu tarjeta.
                   </p>
                 </div>
 
@@ -766,8 +807,8 @@ function PedidoView() {
                 </button>
 
                 <p className="mt-3 text-center text-[10px] text-muted-foreground">
-                  VisualSkin no almacena los datos de tu tarjeta. El pago se
-                  procesa directamente en Shopify.
+                  VisualSkin no almacena los datos de tu tarjeta. El pago se procesa directamente en
+                  Shopify.
                 </p>
               </div>
             )}
@@ -790,17 +831,27 @@ function OrderItemSummaryCard({ item, index }: { item: CartItem; index: number }
   return (
     <article className="rounded-xl border border-border bg-background p-4 text-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}>
+        <div
+          className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
+        >
           {previews.map((preview) => (
             <figure key={preview.kind} className="min-w-0">
               <div className="flex h-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-card sm:w-20">
                 {preview.url ? (
-                  <img src={preview.url} alt={`${preview.label} del producto ${index + 1}`} className="h-full w-full object-contain p-1" />
+                  <img
+                    src={preview.url}
+                    alt={`${preview.label} del producto ${index + 1}`}
+                    className="h-full w-full object-contain p-1"
+                  />
                 ) : (
-                  <span className="px-1 text-center text-[9px] leading-tight text-muted-foreground">Sin preview</span>
+                  <span className="px-1 text-center text-[9px] leading-tight text-muted-foreground">
+                    Sin preview
+                  </span>
                 )}
               </div>
-              <figcaption className="mt-1 text-center text-[9px] text-muted-foreground">{preview.label}</figcaption>
+              <figcaption className="mt-1 text-center text-[9px] text-muted-foreground">
+                {preview.label}
+              </figcaption>
             </figure>
           ))}
         </div>
@@ -808,11 +859,27 @@ function OrderItemSummaryCard({ item, index }: { item: CartItem; index: number }
           <p className="text-xs text-muted-foreground">Producto {index + 1}</p>
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="font-semibold">{cartPackLabel(item.pack_type)}</h3>
-            <strong className="shrink-0 font-mono">${item.line_total.toLocaleString("es-CL")}</strong>
+            <strong className="shrink-0 font-mono">
+              ${item.line_total.toLocaleString("es-CL")}
+            </strong>
           </div>
-          <p className="truncate text-xs text-muted-foreground">{item.brand ? `${item.brand} · ` : ""}{item.phone_model ?? "Modelo pendiente"}</p>
-          {item.garment_id && <p className="text-[11px] text-muted-foreground">{item.pack_type === "carcasa+poleron" ? "Polerón" : "Polera"}: {item.garment_size ?? "—"}{item.garment_color ? ` / ${item.garment_color}` : ""}</p>}
-          {item.secondary_garment_id && <p className="text-[11px] text-muted-foreground">Polerón: {item.secondary_garment_size ?? "—"}{item.secondary_garment_color ? ` / ${item.secondary_garment_color}` : ""}</p>}
+          <p className="truncate text-xs text-muted-foreground">
+            {item.brand ? `${item.brand} · ` : ""}
+            {item.phone_model ?? "Modelo pendiente"}
+          </p>
+          {item.garment_id && (
+            <p className="text-[11px] text-muted-foreground">
+              {item.pack_type === "carcasa+poleron" ? "Polerón" : "Polera"}:{" "}
+              {item.garment_size ?? "—"}
+              {item.garment_color ? ` / ${item.garment_color}` : ""}
+            </p>
+          )}
+          {item.secondary_garment_id && (
+            <p className="text-[11px] text-muted-foreground">
+              Polerón: {item.secondary_garment_size ?? "—"}
+              {item.secondary_garment_color ? ` / ${item.secondary_garment_color}` : ""}
+            </p>
+          )}
         </div>
       </div>
     </article>
@@ -821,16 +888,33 @@ function OrderItemSummaryCard({ item, index }: { item: CartItem; index: number }
 
 function PaymentStatusBadge({ status }: { status: Order["payment_status"] }) {
   const map: Record<Order["payment_status"], { label: string; cls: string }> = {
-    pending: { label: "Pago pendiente", cls: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400" },
-    approved: { label: "Pago aprobado", cls: "border-neon-green/40 bg-neon-green/10 text-neon-green" },
-    rejected: { label: "Pago rechazado", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
+    pending: {
+      label: "Esperando confirmación de pago",
+      cls: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+    },
+    approved: {
+      label: "Pago aprobado",
+      cls: "border-neon-green/40 bg-neon-green/10 text-neon-green",
+    },
+    rejected: {
+      label: "Pago rechazado",
+      cls: "border-destructive/40 bg-destructive/10 text-destructive",
+    },
     cancelled: { label: "Pago cancelado", cls: "border-border bg-secondary text-muted-foreground" },
-    refunded: { label: "Reembolsado", cls: "border-border bg-secondary text-muted-foreground" },
-    charged_back: { label: "Contracargo", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
+    refunded: {
+      label: "Pago reembolsado",
+      cls: "border-border bg-secondary text-muted-foreground",
+    },
+    charged_back: {
+      label: "Pago revertido",
+      cls: "border-destructive/40 bg-destructive/10 text-destructive",
+    },
   };
   const s = map[status];
   return (
-    <div className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${s.cls}`}>
+    <div
+      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${s.cls}`}
+    >
       {s.label}
     </div>
   );
@@ -854,38 +938,110 @@ function Row({ k, v }: { k: string; v: string }) {
 }
 
 type CustomerFormData = {
-  name: string; phone: string; email: string; address: string;
-  comuna: string; region: string; notes: string;
+  name: string;
+  phone: string;
+  email: string;
+  address: string;
+  comuna: string;
+  region: string;
+  notes: string;
 };
 
-function CustomerShippingForm({ saving, error, onSubmit }: {
+function CustomerShippingForm({
+  saving,
+  error,
+  onSubmit,
+}: {
   saving: boolean;
   error: string | null;
   onSubmit: (customer: CustomerFormData) => Promise<void>;
 }) {
   const [form, setForm] = useState<CustomerFormData>({
-    name: "", phone: "", email: "", address: "", comuna: "", region: "", notes: "",
+    name: "",
+    phone: "",
+    email: "",
+    address: "",
+    comuna: "",
+    region: "",
+    notes: "",
   });
-  const set = (key: keyof CustomerFormData) =>
+  const set =
+    (key: keyof CustomerFormData) =>
     (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((current) => ({ ...current, [key]: event.target.value }));
-  const input = "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground";
+  const input =
+    "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground";
   return (
-    <form className="mt-4 grid gap-3" onSubmit={(event) => { event.preventDefault(); void onSubmit(form); }}>
-      <p className="text-sm text-muted-foreground">Completa estos datos para continuar con las condiciones de compra y el pago.</p>
-      <label className="grid gap-1 text-xs"><span>Nombre completo *</span><input required minLength={2} className={input} value={form.name} onChange={set("name")} /></label>
+    <form
+      className="mt-4 grid gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit(form);
+      }}
+    >
+      <p className="text-sm text-muted-foreground">
+        Completa estos datos para continuar con las condiciones de compra y el pago.
+      </p>
+      <label className="grid gap-1 text-xs">
+        <span>Nombre completo *</span>
+        <input required minLength={2} className={input} value={form.name} onChange={set("name")} />
+      </label>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1 text-xs"><span>Teléfono *</span><input required minLength={4} className={input} value={form.phone} onChange={set("phone")} /></label>
-        <label className="grid gap-1 text-xs"><span>Email *</span><input type="email" required className={input} value={form.email} onChange={set("email")} /></label>
+        <label className="grid gap-1 text-xs">
+          <span>Teléfono *</span>
+          <input
+            required
+            minLength={4}
+            className={input}
+            value={form.phone}
+            onChange={set("phone")}
+          />
+        </label>
+        <label className="grid gap-1 text-xs">
+          <span>Email *</span>
+          <input
+            type="email"
+            required
+            className={input}
+            value={form.email}
+            onChange={set("email")}
+          />
+        </label>
       </div>
-      <label className="grid gap-1 text-xs"><span>Dirección *</span><input required minLength={3} className={input} value={form.address} onChange={set("address")} /></label>
+      <label className="grid gap-1 text-xs">
+        <span>Dirección *</span>
+        <input
+          required
+          minLength={3}
+          className={input}
+          value={form.address}
+          onChange={set("address")}
+        />
+      </label>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1 text-xs"><span>Comuna *</span><input required className={input} value={form.comuna} onChange={set("comuna")} /></label>
-        <label className="grid gap-1 text-xs"><span>Región *</span><input required className={input} value={form.region} onChange={set("region")} /></label>
+        <label className="grid gap-1 text-xs">
+          <span>Comuna *</span>
+          <input required className={input} value={form.comuna} onChange={set("comuna")} />
+        </label>
+        <label className="grid gap-1 text-xs">
+          <span>Región *</span>
+          <input required className={input} value={form.region} onChange={set("region")} />
+        </label>
       </div>
-      <label className="grid gap-1 text-xs"><span>Observaciones</span><textarea rows={3} className={input} value={form.notes} onChange={set("notes")} /></label>
-      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-      <button type="submit" disabled={saving} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-5 py-3 text-sm font-semibold text-black disabled:opacity-50">
+      <label className="grid gap-1 text-xs">
+        <span>Observaciones</span>
+        <textarea rows={3} className={input} value={form.notes} onChange={set("notes")} />
+      </label>
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={saving}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-neon-blue px-5 py-3 text-sm font-semibold text-black disabled:opacity-50"
+      >
         {saving && <Loader2 className="h-4 w-4 animate-spin" />}
         Guardar y continuar
       </button>
@@ -912,7 +1068,8 @@ function LegalAcceptanceCard({
         role="alert"
         className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-4 text-xs text-yellow-400"
       >
-        Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más tarde.
+        Las condiciones de compra no están disponibles en este momento. Inténtalo nuevamente más
+        tarde.
       </div>
     );
   }
@@ -935,12 +1092,7 @@ function LegalAcceptanceCard({
           </Link>
         </li>
         <li>
-          <Link
-            to="/cambios-y-devoluciones"
-            target="_blank"
-            rel="noopener"
-            className={linkCls}
-          >
+          <Link to="/cambios-y-devoluciones" target="_blank" rel="noopener" className={linkCls}>
             Cambios y Devoluciones <ExternalLink className="h-3 w-3" />
           </Link>
         </li>
@@ -960,12 +1112,10 @@ function LegalAcceptanceCard({
           aria-describedby="legal-accept-help"
         />
         <span id="legal-accept-help" className="text-[12px] leading-snug text-foreground">
-          He leído y acepto los Términos y Condiciones y la Política de Cambios y
-          Devoluciones. También declaro haber leído la Política de Privacidad.
+          He leído y acepto los Términos y Condiciones y la Política de Cambios y Devoluciones.
+          También declaro haber leído la Política de Privacidad.
         </span>
-        {submitting && (
-          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-neon-blue" />
-        )}
+        {submitting && <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-neon-blue" />}
       </label>
       {error && (
         <p role="alert" className="mt-2 text-[11px] text-destructive">
@@ -975,4 +1125,3 @@ function LegalAcceptanceCard({
     </div>
   );
 }
-

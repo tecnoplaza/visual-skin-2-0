@@ -26,6 +26,7 @@ import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
 import { Route as AdminOrdersIdRouteImport } from './routes/admin.orders.$id'
 import { Route as ApiPublicHooksCleanupRouteImport } from './routes/api/public/hooks/cleanup'
 import { Route as ApiPublicHooksCspReportRouteImport } from './routes/api/public/hooks/csp-report'
+import { Route as ApiPublicHooksNotificationsRouteImport } from './routes/api/public/hooks/notifications'
 import { Route as ApiPublicWebhooksMercadopagoRouteImport } from './routes/api/public/webhooks/mercadopago'
 import { Route as ApiPublicWebhooksShopifyRouteImport } from './routes/api/public/webhooks/shopify'
 
@@ -114,6 +115,12 @@ const ApiPublicHooksCspReportRoute = ApiPublicHooksCspReportRouteImport.update({
   path: '/api/public/hooks/csp-report',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicHooksNotificationsRoute =
+  ApiPublicHooksNotificationsRouteImport.update({
+    id: '/api/public/hooks/notifications',
+    path: '/api/public/hooks/notifications',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicWebhooksMercadopagoRoute =
   ApiPublicWebhooksMercadopagoRouteImport.update({
     id: '/api/public/webhooks/mercadopago',
@@ -145,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
+  '/api/public/hooks/notifications': typeof ApiPublicHooksNotificationsRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
   '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
@@ -166,6 +174,7 @@ export interface FileRoutesByTo {
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
+  '/api/public/hooks/notifications': typeof ApiPublicHooksNotificationsRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
   '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
@@ -188,6 +197,7 @@ export interface FileRoutesById {
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
+  '/api/public/hooks/notifications': typeof ApiPublicHooksNotificationsRoute
   '/api/public/webhooks/mercadopago': typeof ApiPublicWebhooksMercadopagoRoute
   '/api/public/webhooks/shopify': typeof ApiPublicWebhooksShopifyRoute
 }
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
+    | '/api/public/hooks/notifications'
     | '/api/public/webhooks/mercadopago'
     | '/api/public/webhooks/shopify'
   fileRoutesByTo: FileRoutesByTo
@@ -232,6 +243,7 @@ export interface FileRouteTypes {
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
+    | '/api/public/hooks/notifications'
     | '/api/public/webhooks/mercadopago'
     | '/api/public/webhooks/shopify'
   id:
@@ -253,6 +265,7 @@ export interface FileRouteTypes {
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
+    | '/api/public/hooks/notifications'
     | '/api/public/webhooks/mercadopago'
     | '/api/public/webhooks/shopify'
   fileRoutesById: FileRoutesById
@@ -273,6 +286,7 @@ export interface RootRouteChildren {
   PedidoIdRoute: typeof PedidoIdRoute
   ApiPublicHooksCleanupRoute: typeof ApiPublicHooksCleanupRoute
   ApiPublicHooksCspReportRoute: typeof ApiPublicHooksCspReportRoute
+  ApiPublicHooksNotificationsRoute: typeof ApiPublicHooksNotificationsRoute
   ApiPublicWebhooksMercadopagoRoute: typeof ApiPublicWebhooksMercadopagoRoute
   ApiPublicWebhooksShopifyRoute: typeof ApiPublicWebhooksShopifyRoute
 }
@@ -398,6 +412,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksCspReportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/notifications': {
+      id: '/api/public/hooks/notifications'
+      path: '/api/public/hooks/notifications'
+      fullPath: '/api/public/hooks/notifications'
+      preLoaderRoute: typeof ApiPublicHooksNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/webhooks/mercadopago': {
       id: '/api/public/webhooks/mercadopago'
       path: '/api/public/webhooks/mercadopago'
@@ -453,6 +474,7 @@ const rootRouteChildren: RootRouteChildren = {
   PedidoIdRoute: PedidoIdRoute,
   ApiPublicHooksCleanupRoute: ApiPublicHooksCleanupRoute,
   ApiPublicHooksCspReportRoute: ApiPublicHooksCspReportRoute,
+  ApiPublicHooksNotificationsRoute: ApiPublicHooksNotificationsRoute,
   ApiPublicWebhooksMercadopagoRoute: ApiPublicWebhooksMercadopagoRoute,
   ApiPublicWebhooksShopifyRoute: ApiPublicWebhooksShopifyRoute,
 }

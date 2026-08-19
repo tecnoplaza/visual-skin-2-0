@@ -49,6 +49,10 @@ const RawSchema = z.object({
   CSP_REPORT_ONLY: z.string().optional(),
   // Optional email provider marker — presence enables recovery token issuance.
   EMAIL_PROVIDER: z.string().optional(),
+  EMAIL_PROVIDER_API_KEY: z.string().min(10).optional(),
+  VISUALSKIN_EMAIL_FROM: z.string().min(3).max(320).optional(),
+  VISUALSKIN_ADMIN_NOTIFICATION_EMAIL: z.string().email().optional(),
+  NOTIFICATION_CRON_SECRET: z.string().min(32).optional(),
   // URL base del proyecto Supabase para el cliente administrativo.
   // Lovable reserva el prefijo SUPABASE_ para secretos, por eso este nombre.
   VISUALSKIN_SUPABASE_ADMIN_URL: z.string().optional(),
@@ -83,6 +87,11 @@ export type ServerConfig = {
   csrfSigningSecret: string | null;
   cspReportOnly: boolean;
   emailProviderConfigured: boolean;
+  emailProvider: string | null;
+  emailProviderApiKey: string | null;
+  emailFrom: string | null;
+  adminNotificationEmail: string | null;
+  notificationCronSecret: string | null;
   isProduction: boolean;
 };
 
@@ -124,9 +133,9 @@ function normalizeSupabaseAdminUrl(raw: string | undefined): string | null {
     throw err;
   }
   if (u.protocol !== "https:") {
-    const err = new Error(
-      "VISUALSKIN_SUPABASE_ADMIN_URL_INVALID: debe usar HTTPS",
-    ) as Error & { code: string };
+    const err = new Error("VISUALSKIN_SUPABASE_ADMIN_URL_INVALID: debe usar HTTPS") as Error & {
+      code: string;
+    };
     err.code = "VISUALSKIN_SUPABASE_ADMIN_URL_INVALID";
     throw err;
   }
@@ -192,9 +201,7 @@ export function getServerConfig(): ServerConfig {
   if (cached) return cached;
   const parsed = RawSchema.safeParse(process.env);
   if (!parsed.success) {
-    const missing = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
+    const missing = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Configuración de servidor inválida — ${missing}`);
   }
   const raw = parsed.data;
@@ -203,9 +210,7 @@ export function getServerConfig(): ServerConfig {
   const siteOrigin = normalizeSiteOrigin(raw.PUBLIC_SITE_URL, isProduction);
   const siteHost = new URL(siteOrigin).host;
   if (isProduction && !raw.CLEANUP_CRON_SECRET) {
-    throw new Error(
-      "CLEANUP_CRON_SECRET es obligatorio en producción (mín. 32 bytes)",
-    );
+    throw new Error("CLEANUP_CRON_SECRET es obligatorio en producción (mín. 32 bytes)");
   }
   const mpEnv: MpEnv | null = raw.MERCADOPAGO_ENV ?? null;
   const paymentsEnabled = (raw.PAYMENTS_ENABLED ?? "").toLowerCase() === "true";
@@ -230,9 +235,7 @@ export function getServerConfig(): ServerConfig {
 
   // In production, the dedicated CSRF secret is mandatory.
   if (isProduction && !csrfSigningSecret) {
-    throw new Error(
-      "CSRF_SIGNING_SECRET es obligatorio en producción (mín. 32 bytes)",
-    );
+    throw new Error("CSRF_SIGNING_SECRET es obligatorio en producción (mín. 32 bytes)");
   }
 
   // isLiveMode is true only when the *full* production pair resolves.
@@ -245,9 +248,7 @@ export function getServerConfig(): ServerConfig {
     );
   }
 
-  const supabaseAdminUrl = normalizeSupabaseAdminUrl(
-    raw.VISUALSKIN_SUPABASE_ADMIN_URL,
-  );
+  const supabaseAdminUrl = normalizeSupabaseAdminUrl(raw.VISUALSKIN_SUPABASE_ADMIN_URL);
 
   const allowedOrigins = buildAllowedOrigins(
     siteOrigin,
@@ -270,7 +271,14 @@ export function getServerConfig(): ServerConfig {
     csrfSigningSecret,
     cspReportOnly: raw.CSP_REPORT_ONLY === "1",
     emailProviderConfigured:
-      !!raw.EMAIL_PROVIDER && raw.EMAIL_PROVIDER.trim().length > 0,
+      raw.EMAIL_PROVIDER === "resend" &&
+      !!raw.EMAIL_PROVIDER_API_KEY &&
+      !!raw.VISUALSKIN_EMAIL_FROM,
+    emailProvider: raw.EMAIL_PROVIDER?.trim().toLowerCase() || null,
+    emailProviderApiKey: raw.EMAIL_PROVIDER_API_KEY ?? null,
+    emailFrom: raw.VISUALSKIN_EMAIL_FROM ?? null,
+    adminNotificationEmail: raw.VISUALSKIN_ADMIN_NOTIFICATION_EMAIL ?? null,
+    notificationCronSecret: raw.NOTIFICATION_CRON_SECRET ?? null,
     isProduction,
   };
   cached = resolved;
@@ -342,9 +350,7 @@ function buildAllowedOrigins(
       if (norm) set.add(norm);
     }
   }
-  const vercelDeploymentOrigin = normalizeVercelDeploymentOrigin(
-    vercelDeploymentHost,
-  );
+  const vercelDeploymentOrigin = normalizeVercelDeploymentOrigin(vercelDeploymentHost);
   if (vercelDeploymentOrigin) set.add(vercelDeploymentOrigin);
   if (!isProduction) {
     set.add("http://localhost:8080");
@@ -383,9 +389,7 @@ export function getMercadoPagoConfig(): MercadoPagoConfig {
     ? raw.MERCADOPAGO_WEBHOOK_SECRET_PRODUCTION
     : raw.MERCADOPAGO_WEBHOOK_SECRET_TEST;
   const collectorId =
-    (isProd
-      ? raw.MERCADOPAGO_COLLECTOR_ID_PRODUCTION
-      : raw.MERCADOPAGO_COLLECTOR_ID_TEST) ?? null;
+    (isProd ? raw.MERCADOPAGO_COLLECTOR_ID_PRODUCTION : raw.MERCADOPAGO_COLLECTOR_ID_TEST) ?? null;
 
   const missing: string[] = [];
   const suffix = isProd ? "PRODUCTION" : "TEST";
@@ -393,9 +397,10 @@ export function getMercadoPagoConfig(): MercadoPagoConfig {
   if (!publicKey) missing.push(`MERCADOPAGO_PUBLIC_KEY_${suffix}`);
   if (!webhookSecret) missing.push(`MERCADOPAGO_WEBHOOK_SECRET_${suffix}`);
   if (missing.length > 0) {
-    const err = new Error(
-      `PAYMENT_CREDENTIALS_INCOMPLETE: ${missing.join(", ")}`,
-    ) as Error & { code: string; missing: string[] };
+    const err = new Error(`PAYMENT_CREDENTIALS_INCOMPLETE: ${missing.join(", ")}`) as Error & {
+      code: string;
+      missing: string[];
+    };
     err.code = "PAYMENT_CREDENTIALS_INCOMPLETE";
     err.missing = missing;
     throw err;
@@ -440,9 +445,7 @@ export function tryGetAllowedOrigins(): string[] {
 export function getCsrfSigningKey(): string {
   const cfg = getServerConfig();
   if (!cfg.csrfSigningSecret) {
-    throw new Error(
-      "CSRF_SIGNING_SECRET no configurado — no se puede firmar tokens CSRF",
-    );
+    throw new Error("CSRF_SIGNING_SECRET no configurado — no se puede firmar tokens CSRF");
   }
   return cfg.csrfSigningSecret + "|csrf-v1";
 }
@@ -574,11 +577,7 @@ export function getSupabaseAdminKeyConfig(): SupabaseAdminKeyConfig {
   throw err;
 }
 
-export type AdminKeyDiagLabel =
-  | "secret"
-  | "legacy_service_role"
-  | "invalida"
-  | "ausente";
+export type AdminKeyDiagLabel = "secret" | "legacy_service_role" | "invalida" | "ausente";
 
 function classifyAdminKey(): {
   configured: boolean;
@@ -612,19 +611,16 @@ async function probeAdminClient(): Promise<boolean> {
     if (admin.type === "legacy_service_role") {
       headers.Authorization = `Bearer ${admin.key}`;
     }
-    const resp = await fetch(
-      `${adminUrl}/rest/v1/rpc/consume_rate_limit`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          p_scope: "admin_key_diagnostic",
-          p_bucket_key: "diag",
-          p_limit: 2,
-          p_window_seconds: 60,
-        }),
-      },
-    );
+    const resp = await fetch(`${adminUrl}/rest/v1/rpc/consume_rate_limit`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        p_scope: "admin_key_diagnostic",
+        p_bucket_key: "diag",
+        p_limit: 2,
+        p_window_seconds: 60,
+      }),
+    });
     if (!resp.ok) {
       try {
         await resp.text();
@@ -632,10 +628,10 @@ async function probeAdminClient(): Promise<boolean> {
       return false;
     }
     try {
-      await fetch(
-        `${adminUrl}/rest/v1/rate_limits?scope=eq.admin_key_diagnostic`,
-        { method: "DELETE", headers },
-      );
+      await fetch(`${adminUrl}/rest/v1/rate_limits?scope=eq.admin_key_diagnostic`, {
+        method: "DELETE",
+        headers,
+      });
     } catch {}
     return true;
   } catch {
@@ -662,9 +658,7 @@ export type PaymentsGateSummary = {
 /** Simple boolean form for diagnostics — no throw, no values. */
 export async function getPaymentsGateSummary(): Promise<PaymentsGateSummary> {
   const adminKey = classifyAdminKey();
-  const adminClientValidated = adminKey.configured
-    ? await probeAdminClient()
-    : false;
+  const adminClientValidated = adminKey.configured ? await probeAdminClient() : false;
   try {
     const cfg = getServerConfig();
     const mp = tryGetMercadoPagoConfig();

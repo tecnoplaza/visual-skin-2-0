@@ -21,6 +21,7 @@ import {
 import CmsView from "@/components/admin/CmsView";
 import PaymentGatewaysView from "@/components/admin/PaymentGatewaysView";
 import DiagnosticsView from "@/components/admin/DiagnosticsView";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { processPsd } from "@/lib/psd-processor";
 import { removeWhiteBackground } from "@/lib/remove-white-bg";
 import {
@@ -146,9 +147,12 @@ function AdminPanel() {
     <section className="mx-auto max-w-7xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl font-bold">Panel administrador</h1>
-        <button onClick={() => supabase.auth.signOut()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:border-destructive/50 hover:text-destructive">
-          <LogOut className="h-4 w-4" /> Salir
-        </button>
+        <div className="flex items-center gap-2">
+          <AdminNotificationBell />
+          <button onClick={() => supabase.auth.signOut()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:border-destructive/50 hover:text-destructive">
+            <LogOut className="h-4 w-4" /> Salir
+          </button>
+        </div>
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2 border-b border-border">

@@ -11,15 +11,12 @@ import {
 } from "@/lib/orders.functions";
 import { toast } from "sonner";
 import { productionDisplayLabel, shouldShowProductionControls } from "@/lib/production-display";
-
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 
 export const Route = createFileRoute("/admin/orders/$id")({
   component: AdminOrderDetailRoute,
   head: () => ({
-    meta: [
-      { title: "Pedido — Admin VISUALSKIN" },
-      { name: "robots", content: "noindex,nofollow" },
-    ],
+    meta: [{ title: "Pedido — Admin VISUALSKIN" }, { name: "robots", content: "noindex,nofollow" }],
   }),
 });
 
@@ -45,7 +42,12 @@ function AdminOrderDetailRoute() {
 }
 
 const FULFILLMENT_OPTIONS = [
-  "new", "in_production", "ready", "shipped", "completed", "cancelled",
+  "new",
+  "in_production",
+  "ready",
+  "shipped",
+  "completed",
+  "cancelled",
 ] as const;
 
 function originalLabel(kind: string) {
@@ -62,7 +64,6 @@ function Detail({ id }: { id: string }) {
   const [recoveryUrl, setRecoveryUrl] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
 
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -75,7 +76,9 @@ function Detail({ id }: { id: string }) {
     }
   }, [id]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const openSigned = async (path: string) => {
     try {
@@ -162,7 +165,6 @@ function Detail({ id }: { id: string }) {
     }
   };
 
-
   if (loading || !data) {
     return (
       <div className="grid min-h-[40vh] place-items-center">
@@ -186,14 +188,15 @@ function Detail({ id }: { id: string }) {
             {o.order_number ?? o.id.slice(0, 8)}
           </h1>
         </div>
-        <div className="text-right text-xs text-muted-foreground">
-          {new Date(o.created_at).toLocaleString("es-CL")}
+        <div className="flex items-center gap-3 text-right text-xs text-muted-foreground">
+          <AdminNotificationBell />
+          <span>{new Date(o.created_at).toLocaleString("es-CL")}</span>
         </div>
       </div>
 
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200/90">
-        El pago, el monto y los IDs del proveedor de pago no pueden modificarse desde aquí.
-        La descarga permanente de originales se habilita únicamente para pedidos pagados.
+        El pago, el monto y los IDs del proveedor de pago no pueden modificarse desde aquí. La
+        descarga permanente de originales se habilita únicamente para pedidos pagados.
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -266,8 +269,8 @@ function Detail({ id }: { id: string }) {
       <Card title="Recuperar acceso al pedido">
         <div className="space-y-3 text-xs">
           <p className="text-muted-foreground">
-            Genera un enlace de acceso de un solo uso. Rota el token público del pedido
-            e invalida enlaces y sesiones anteriores. Se muestra una sola vez.
+            Genera un enlace de acceso de un solo uso. Rota el token público del pedido e invalida
+            enlaces y sesiones anteriores. Se muestra una sola vez.
           </p>
           <button
             onClick={issueRecoveryLink}
@@ -287,9 +290,7 @@ function Detail({ id }: { id: string }) {
                 Enlace único — cópialo ahora, no se volverá a mostrar
               </div>
               <div className="flex items-start gap-2">
-                <code className="flex-1 break-all font-mono text-[11px]">
-                  {recoveryUrl}
-                </code>
+                <code className="flex-1 break-all font-mono text-[11px]">{recoveryUrl}</code>
                 <button
                   onClick={copyRecoveryLink}
                   className="shrink-0 rounded border border-border p-1 hover:border-neon-blue"
@@ -307,14 +308,16 @@ function Detail({ id }: { id: string }) {
         <LegalAcceptanceBlock order={o} />
       </Card>
 
-
       <Card title="Snapshot de catálogo">
         <KV k="Pack" v={`${snap?.pack?.type ?? o.pack_type}`} />
         <KV k="Marca" v={snap?.brand?.name ?? o.brand ?? "—"} />
         <KV k="Modelo" v={snap?.model?.name ?? o.phone_model ?? "—"} />
         {snap?.garment && (
           <>
-            <KV k="Prenda" v={`${snap.garment.type} · ${snap.garment.name} · ${snap.garment.color}`} />
+            <KV
+              k="Prenda"
+              v={`${snap.garment.type} · ${snap.garment.name} · ${snap.garment.color}`}
+            />
             <KV k="Talla" v={snap.garment.size ?? "—"} />
           </>
         )}
@@ -323,8 +326,8 @@ function Detail({ id }: { id: string }) {
       <Card title="Archivos originales del cliente">
         {!originalsAvailable && (
           <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200/90">
-            Pedido no pagado: los originales se conservan temporalmente y pueden limpiarse después de 72 horas.
-            La descarga administrativa se habilita cuando el pago está aprobado.
+            Pedido no pagado: los originales se conservan temporalmente y pueden limpiarse después
+            de 72 horas. La descarga administrativa se habilita cuando el pago está aprobado.
           </div>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
@@ -346,7 +349,11 @@ function Detail({ id }: { id: string }) {
                   onClick={() => downloadOriginal(a.file_path)}
                   disabled={!originalsAvailable}
                   className="inline-flex items-center gap-1 rounded border border-border px-3 py-1 text-xs hover:border-neon-green disabled:cursor-not-allowed disabled:opacity-40"
-                  title={originalsAvailable ? "Descargar archivo original" : "Disponible al aprobarse el pago"}
+                  title={
+                    originalsAvailable
+                      ? "Descargar archivo original"
+                      : "Disponible al aprobarse el pago"
+                  }
                 >
                   <Download className="h-3 w-3" /> Descargar original
                 </button>
@@ -361,8 +368,8 @@ function Detail({ id }: { id: string }) {
 
       <Card title="Archivo de producción">
         <div className="text-xs text-muted-foreground">
-          El archivo print-ready es independiente del original del cliente y del mockup.
-          La generación automática todavía no está implementada.
+          El archivo print-ready es independiente del original del cliente y del mockup. La
+          generación automática todavía no está implementada.
         </div>
         {data.designAssets.length > 0 && (
           <button
@@ -383,7 +390,8 @@ function Detail({ id }: { id: string }) {
                 {a.status_detail && ` · ${a.status_detail}`}
               </div>
               <div className="text-muted-foreground">
-                {a.mercado_pago_payment_id ?? "—"} · {new Date(a.created_at).toLocaleString("es-CL")}
+                {a.mercado_pago_payment_id ?? "—"} ·{" "}
+                {new Date(a.created_at).toLocaleString("es-CL")}
               </div>
             </li>
           ))}
@@ -397,12 +405,11 @@ function Detail({ id }: { id: string }) {
         <ul className="space-y-1 text-xs">
           {data.events.map((e: any) => (
             <li key={e.id} className="font-mono">
-              [{e.status}] {e.event_type}/{e.event_action ?? "—"} — {new Date(e.created_at).toLocaleString("es-CL")}
+              [{e.status}] {e.event_type}/{e.event_action ?? "—"} —{" "}
+              {new Date(e.created_at).toLocaleString("es-CL")}
             </li>
           ))}
-          {data.events.length === 0 && (
-            <li className="text-muted-foreground">Sin eventos.</li>
-          )}
+          {data.events.length === 0 && <li className="text-muted-foreground">Sin eventos.</li>}
         </ul>
       </Card>
 
@@ -410,8 +417,8 @@ function Detail({ id }: { id: string }) {
         <ul className="space-y-1 text-xs font-mono">
           {data.authorizations.map((a: any) => (
             <li key={a.id}>
-              [{a.status}] {a.kind} · {a.storage_path} ·{" "}
-              {a.detected_width ?? "?"}×{a.detected_height ?? "?"}
+              [{a.status}] {a.kind} · {a.storage_path} · {a.detected_width ?? "?"}×
+              {a.detected_height ?? "?"}
             </li>
           ))}
           {data.authorizations.length === 0 && (
@@ -426,9 +433,7 @@ function Detail({ id }: { id: string }) {
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-4">
-      <div className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">
-        {title}
-      </div>
+      <div className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">{title}</div>
       <div className="space-y-2 text-sm">{children}</div>
     </div>
   );
@@ -477,9 +482,18 @@ function LegalAcceptanceBlock({ order }: { order: any }) {
       </div>
       <KV k="Fecha" v={new Date(acceptedAt).toLocaleString("es-CL")} />
       <KV k="Hash (abrev.)" v={hash ? `${hash.slice(0, 12)}…${hash.slice(-8)}` : "—"} mono />
-      <KV k="Términos y Condiciones" v={termsUpdated ? new Date(termsUpdated).toLocaleString("es-CL") : "—"} />
-      <KV k="Cambios y Devoluciones" v={returnsUpdated ? new Date(returnsUpdated).toLocaleString("es-CL") : "—"} />
-      <KV k="Política de Privacidad" v={privacyUpdated ? new Date(privacyUpdated).toLocaleString("es-CL") : "—"} />
+      <KV
+        k="Términos y Condiciones"
+        v={termsUpdated ? new Date(termsUpdated).toLocaleString("es-CL") : "—"}
+      />
+      <KV
+        k="Cambios y Devoluciones"
+        v={returnsUpdated ? new Date(returnsUpdated).toLocaleString("es-CL") : "—"}
+      />
+      <KV
+        k="Política de Privacidad"
+        v={privacyUpdated ? new Date(privacyUpdated).toLocaleString("es-CL") : "—"}
+      />
       <KV k="Marca" v="VisualSkin" />
       <KV k="Entidad jurídica" v="TECNOPLAZA SpA" />
       <button
@@ -491,7 +505,7 @@ function LegalAcceptanceBlock({ order }: { order: any }) {
       </button>
       {showSnapshot && snap && (
         <pre className="mt-2 max-h-80 overflow-auto rounded border border-border bg-background p-2 font-mono text-[10px] leading-snug text-muted-foreground">
-{JSON.stringify(snap, null, 2)}
+          {JSON.stringify(snap, null, 2)}
         </pre>
       )}
       <p className="mt-1 text-[10px] text-muted-foreground/80">

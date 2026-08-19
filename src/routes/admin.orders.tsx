@@ -9,6 +9,7 @@ import {
 } from "@/lib/orders.functions";
 import { toast } from "sonner";
 import { productionDisplayLabel } from "@/lib/production-display";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 
 export const Route = createFileRoute("/admin/orders")({
   component: AdminOrdersRoute,
@@ -182,12 +183,17 @@ function OrdersList() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-bold">Pedidos</h1>
         <div className="flex flex-wrap gap-2">
+          <AdminNotificationBell />
           <button
             onClick={cleanupStale}
             disabled={cleanupBusy || deleting}
             className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-3 py-2 text-sm text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
           >
-            {cleanupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {cleanupBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
             Limpiar no pagados +72 h
           </button>
           <Link
@@ -203,14 +209,37 @@ function OrdersList() {
         <Input p="Número…" v={f.qNumber} on={(v) => setF({ ...f, qNumber: v })} />
         <Input p="Nombre…" v={f.qName} on={(v) => setF({ ...f, qName: v })} />
         <Input p="Correo…" v={f.qEmail} on={(v) => setF({ ...f, qEmail: v })} />
-        <Sel v={f.paymentStatus} on={(v) => setF({ ...f, paymentStatus: v })} opts={["", "pending", "approved", "rejected", "cancelled", "refunded", "charged_back"]} label="Pago" />
-        <Sel v={f.fulfillmentStatus} on={(v) => setF({ ...f, fulfillmentStatus: v })} opts={["", "new", "in_production", "ready", "shipped", "completed", "cancelled"]} label="Producción" />
-        <Sel v={f.designStatus} on={(v) => setF({ ...f, designStatus: v })} opts={["", "pending", "editable", "uploading", "ready", "locked", "failed"]} label="Diseño" />
-        <Sel v={f.manualReview} on={(v) => setF({ ...f, manualReview: v as any })} opts={["", "yes", "no"]} label="Revisión manual" />
+        <Sel
+          v={f.paymentStatus}
+          on={(v) => setF({ ...f, paymentStatus: v })}
+          opts={["", "pending", "approved", "rejected", "cancelled", "refunded", "charged_back"]}
+          label="Pago"
+        />
+        <Sel
+          v={f.fulfillmentStatus}
+          on={(v) => setF({ ...f, fulfillmentStatus: v })}
+          opts={["", "new", "in_production", "ready", "shipped", "completed", "cancelled"]}
+          label="Producción"
+        />
+        <Sel
+          v={f.designStatus}
+          on={(v) => setF({ ...f, designStatus: v })}
+          opts={["", "pending", "editable", "uploading", "ready", "locked", "failed"]}
+          label="Diseño"
+        />
+        <Sel
+          v={f.manualReview}
+          on={(v) => setF({ ...f, manualReview: v as any })}
+          opts={["", "yes", "no"]}
+          label="Revisión manual"
+        />
         <Input type="date" v={f.from} on={(v) => setF({ ...f, from: v })} />
         <Input type="date" v={f.to} on={(v) => setF({ ...f, to: v })} />
         <button
-          onClick={() => { setPage(1); load(); }}
+          onClick={() => {
+            setPage(1);
+            load();
+          }}
           className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-3 py-2 text-sm font-semibold text-background"
         >
           <Search className="h-4 w-4" /> Buscar
@@ -219,7 +248,8 @@ function OrdersList() {
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
         <div className="text-muted-foreground">
-          {selected.size} seleccionado(s). Los pedidos pagados/reembolsados/contracargados no son seleccionables.
+          {selected.size} seleccionado(s). Los pedidos pagados/reembolsados/contracargados no son
+          seleccionables.
         </div>
         <button
           onClick={deleteSelected}
@@ -270,50 +300,56 @@ function OrdersList() {
                         onChange={() => toggleRow(r.id)}
                         disabled={protectedOrder}
                         aria-label={`Seleccionar ${r.order_number ?? r.id}`}
-                        title={protectedOrder ? "Pedido protegido por su estado de pago" : "Seleccionar pedido"}
+                        title={
+                          protectedOrder
+                            ? "Pedido protegido por su estado de pago"
+                            : "Seleccionar pedido"
+                        }
                       />
                     </td>
-                  <td className="p-3 text-xs text-muted-foreground">
-                    {new Date(r.created_at).toLocaleDateString("es-CL")}
-                  </td>
-                  <td className="p-3 font-mono text-xs">{r.order_number ?? "—"}</td>
-                  <td className="p-3">
-                    <div>{r.customer_name ?? "—"}</div>
-                    <div className="text-xs text-muted-foreground">{r.customer_email}</div>
-                    {r.customer_phone && (
-                      <div className="text-xs text-muted-foreground">{r.customer_phone}</div>
-                    )}
-                  </td>
-                  <td className="p-3 font-mono">${r.total_amount.toLocaleString("es-CL")}</td>
+                    <td className="p-3 text-xs text-muted-foreground">
+                      {new Date(r.created_at).toLocaleDateString("es-CL")}
+                    </td>
+                    <td className="p-3 font-mono text-xs">{r.order_number ?? "—"}</td>
+                    <td className="p-3">
+                      <div>{r.customer_name ?? "—"}</div>
+                      <div className="text-xs text-muted-foreground">{r.customer_email}</div>
+                      {r.customer_phone && (
+                        <div className="text-xs text-muted-foreground">{r.customer_phone}</div>
+                      )}
+                    </td>
+                    <td className="p-3 font-mono">${r.total_amount.toLocaleString("es-CL")}</td>
                     <td className="p-3 text-xs">
                       {r.payment_status}
                       {protectedOrder && (
                         <div className="mt-1 text-[10px] text-neon-green">protegido</div>
                       )}
                     </td>
-                  <td className="p-3 text-xs">{productionDisplayLabel(r.payment_status, r.fulfillment_status)}</td>
-                  <td className="p-3 text-xs">{r.design_status}</td>
-                  <td className="p-3 text-xs">
-                    {r.manual_review_required && (
-                      <span className="rounded bg-destructive/20 px-2 py-0.5 text-destructive">
-                        revisión
-                      </span>
-                    )}{" "}
-                    {r.low_resolution_warning && (
-                      <span className="rounded bg-yellow-500/20 px-2 py-0.5 text-yellow-300">
-                        baja res
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    <Link
-                      to="/admin/orders/$id"
-                      params={{ id: r.id }}
-                      className="rounded border border-border px-3 py-1 text-xs hover:border-neon-blue"
-                    >
-                      Ver
-                    </Link>
-                  </td>
+                    <td className="p-3 text-xs">
+                      {productionDisplayLabel(r.payment_status, r.fulfillment_status)}
+                    </td>
+                    <td className="p-3 text-xs">{r.design_status}</td>
+                    <td className="p-3 text-xs">
+                      {r.manual_review_required && (
+                        <span className="rounded bg-destructive/20 px-2 py-0.5 text-destructive">
+                          revisión
+                        </span>
+                      )}{" "}
+                      {r.low_resolution_warning && (
+                        <span className="rounded bg-yellow-500/20 px-2 py-0.5 text-yellow-300">
+                          baja res
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      <Link
+                        to="/admin/orders/$id"
+                        params={{ id: r.id }}
+                        className="rounded border border-border px-3 py-1 text-xs hover:border-neon-blue"
+                      >
+                        Ver
+                      </Link>
+                    </td>
                   </tr>
                 );
               })}
@@ -355,8 +391,16 @@ function OrdersList() {
 }
 
 function Input({
-  v, on, p, type = "text",
-}: { v: string; on: (v: string) => void; p?: string; type?: string }) {
+  v,
+  on,
+  p,
+  type = "text",
+}: {
+  v: string;
+  on: (v: string) => void;
+  p?: string;
+  type?: string;
+}) {
   return (
     <input
       type={type}
@@ -369,8 +413,16 @@ function Input({
 }
 
 function Sel({
-  v, on, opts, label,
-}: { v: string; on: (v: string) => void; opts: string[]; label: string }) {
+  v,
+  on,
+  opts,
+  label,
+}: {
+  v: string;
+  on: (v: string) => void;
+  opts: string[];
+  label: string;
+}) {
   return (
     <select
       value={v}
