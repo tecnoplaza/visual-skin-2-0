@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, FormEvent } from "react";
 import {
   Lock, LogOut, Package, ShoppingBag, Layers, Shirt, Image as ImageIcon,
   Plus, Trash2, Edit2, X, Loader2, Upload, ShieldAlert, UploadCloud, FileText,
-  CreditCard, Activity,
+  CreditCard, Activity, BarChart3, RadioTower,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
@@ -167,6 +167,18 @@ function AdminPanel() {
             <t.icon className="h-4 w-4" /> {t.label}
           </button>
         ))}
+        <Link
+          to="/admin/analytics"
+          className="inline-flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <BarChart3 className="h-4 w-4" /> Analítica
+        </Link>
+        <Link
+          to="/admin/analytics/settings"
+          className="inline-flex items-center gap-2 border-b-2 border-transparent px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <RadioTower className="h-4 w-4" /> Píxeles y seguimiento
+        </Link>
       </div>
 
       {tab === "dashboard" && <DashboardView />}

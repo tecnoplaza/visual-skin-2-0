@@ -4,6 +4,7 @@ import {
   useContactContent, instagramUrl, facebookUrl,
   useLegalTerms, useLegalPrivacy, useLegalReturns,
 } from "@/lib/cms";
+import { openConsentPreferences } from "@/lib/analytics/identity";
 
 export function Footer() {
   const { data: contact } = useContactContent();
@@ -83,6 +84,7 @@ export function Footer() {
                 <Link to={l.to} className="hover:text-foreground">{l.label}</Link>
               </li>
             ))}
+            <li><button type="button" onClick={openConsentPreferences} className="hover:text-foreground">Preferencias de cookies</button></li>
           </ul>
         </div>
       )}

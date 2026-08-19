@@ -15,6 +15,7 @@ import { Header } from "../components/site/Header";
 import { Footer } from "../components/site/Footer";
 import { Toaster } from "@/components/ui/sonner";
 import { useVisualContent } from "@/lib/cms";
+import AnalyticsManager from "@/components/analytics/AnalyticsManager";
 
 const FALLBACK_FAVICON = "/favicon.ico";
 
@@ -176,6 +177,7 @@ function RootComponent() {
         <Outlet />
       </main>
       <Footer />
+      <AnalyticsManager />
       <Toaster richColors position="top-right" />
     </QueryClientProvider>
   );

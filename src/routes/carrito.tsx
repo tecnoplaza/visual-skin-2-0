@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { activeCartItems, activeCartQueryOptions, canContinueCart, cartItemPreviewSlots, cartPackLabel, designStatusLabel, CART_QUERY_KEY } from "@/lib/cart";
 import { getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
+import { trackVisualSkinEvent } from "@/lib/analytics";
 
 type Search = { added?: boolean };
 
@@ -54,8 +55,9 @@ function CartPage() {
       if (!cart?.order.id) throw new Error("Carrito no disponible");
       await removeOrderItem({ data: { orderId: cart.order.id, orderItemId } });
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, orderItemId) => {
       toast.success("Producto eliminado");
+      trackVisualSkinEvent({event_name:"remove_from_cart",order_id:cart?.order.id,order_item_id:orderItemId});
       await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
     },
     onError: (error) => {
@@ -149,7 +151,7 @@ function CartPage() {
           </dl>
           <div className="mt-5 flex items-end justify-between border-t border-border pt-5"><span>Total</span><strong className="font-mono text-2xl text-neon-green">{clp(cart.order.total_amount)}</strong></div>
           {!ready && <p className="mt-4 rounded-lg bg-yellow-500/10 p-3 text-xs text-yellow-400">Todos los productos deben tener su diseño listo antes de continuar.</p>}
-          <button type="button" disabled={!ready} onClick={() => void navigate({ to: "/pedido/$id", params: { id: cart.order.id }, search: {} })} className="mt-5 w-full rounded-xl bg-neon-blue px-5 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40">Continuar con el pedido</button>
+          <button type="button" disabled={!ready} onClick={() => { trackVisualSkinEvent({event_name:"begin_checkout",order_id:cart.order.id,value:cart.order.total_amount,currency:cart.order.currency,metadata:{item_count:items.length,item_ids:items.map(i=>i.id)}}); void navigate({ to: "/pedido/$id", params: { id: cart.order.id }, search: {} }); }} className="mt-5 w-full rounded-xl bg-neon-blue px-5 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40">Continuar con el pedido</button>
         </aside>
       </div>
     </div>

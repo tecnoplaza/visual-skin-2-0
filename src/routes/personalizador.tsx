@@ -10,6 +10,7 @@ import { removeImageBackground } from "@/lib/remove-bg";
 import { usePromoPack, usePromoPacks } from "@/lib/cms";
 import { dataUrlToBlob, renderGarmentPNG, uploadOrderItemDesign } from "@/lib/order-export";
 import { addOrderItem, createSecureOrder, finalizeOrderItemDesigns, getOrderCsrfToken } from "@/lib/orders.functions";
+import { trackVisualSkinEvent } from "@/lib/analytics";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { activeCartQueryOptions, cartWriteMode, CART_QUERY_KEY } from "@/lib/cart";
 import GarmentDesignCanvas, { type GarmentCanvasRow } from "@/components/personalizador/GarmentDesignCanvas";
@@ -123,6 +124,7 @@ function Personalizador() {
   const [shirtDesign, setShirtDesign] = useState<Design | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const clientItemKeyRef = useRef(`cart-${crypto.randomUUID()}`);
+  useEffect(() => { trackVisualSkinEvent({ event_name: "customizer_started", pack_type: pack }); }, []);
 
   const previewStageRef = useRef<Konva.Stage | null>(null);
 
@@ -219,6 +221,9 @@ function Personalizador() {
 
   const brand = brands.find((b) => b.id === brandId);
   const model = models.find((m) => m.id === modelId);
+  useEffect(() => {
+    if (model) trackVisualSkinEvent({ event_name: "view_item", pack_type: pack, phone_brand: brand?.name, phone_model: model.name, value: price, currency: "CLP" });
+  }, [model?.id]);
 
   const stepLabels = isCompletePack
     ? ["Modelo", "Carcasa", "Polera", "Polerón", "Vista previa"]
@@ -453,7 +458,7 @@ function Personalizador() {
                   selectedCompleteShirt.id !== selectedCompleteHoodie.id;
                 return completeActive ? (
                   <button
-                    onClick={() => { if (!showCheckout) setShowCheckout(true); }}
+                    onClick={() => { if (!showCheckout) { trackVisualSkinEvent({event_name:"customizer_completed",pack_type:pack,phone_brand:brand?.name,phone_model:model?.name}); setShowCheckout(true); } }}
                     disabled={!completeReady || showCheckout}
                     aria-busy={showCheckout || undefined}
                     className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
@@ -479,7 +484,7 @@ function Personalizador() {
               })()
             ) : (
               <button
-                onClick={() => { if (!showCheckout) setShowCheckout(true); }}
+                onClick={() => { if (!showCheckout) { trackVisualSkinEvent({event_name:"customizer_completed",pack_type:pack,phone_brand:brand?.name,phone_model:model?.name}); setShowCheckout(true); } }}
                 disabled={showCheckout || !caseDesign || (hasShirt && (!shirtDesign || !selectedGarment)) || !model}
                 aria-busy={showCheckout || undefined}
                 className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-neon-blue to-neon-green px-5 py-2 text-sm font-semibold text-background disabled:opacity-40"
@@ -605,6 +610,7 @@ function Personalizador() {
                 });
 
                 await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
+                trackVisualSkinEvent({event_name:"add_to_cart",order_id:orderId,order_item_id:orderItemId,pack_type:selection.packType,phone_brand:brand?.name,phone_model:model.name,value:price,currency:"CLP",metadata:{quantity:1}});
                 navigate({ to: "/carrito", search: { added: true } });
                 return;
               }
@@ -705,6 +711,7 @@ function Personalizador() {
               });
 
               await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
+              trackVisualSkinEvent({event_name:"add_to_cart",order_id:orderId,order_item_id:orderItemId,pack_type:selection.packType,phone_brand:brand?.name,phone_model:model.name,value:price,currency:"CLP",metadata:{quantity:1}});
               navigate({ to: "/carrito", search: { added: true } });
             }}
           />

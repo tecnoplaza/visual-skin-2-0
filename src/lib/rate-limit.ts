@@ -16,7 +16,8 @@ export type RateLimitScope =
   | "recovery_request"
   | "recovery_consume"
   | "order_read"
-  | "csp_report";
+  | "csp_report"
+  | "analytics_event";
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -149,6 +150,7 @@ export async function enforceRateLimit(
 
 
 export const RATE_LIMITS = {
+  analytics_event:   { limit: 120, window: 60 },            // 120 / minute / ip + identity
   create_order:      { limit: 10, window: 60 * 60 },        // 10 / hour / ip
   cart_mutation:     { limit: 60, window: 60 * 60 },        // 60 / hour / order
   exchange_token:    { limit: 10, window: 15 * 60 },        // 10 / 15 min / order

@@ -32,6 +32,7 @@ import {
   cartPackLabel,
   type CartItem,
 } from "@/lib/cart";
+import { trackVisualSkinEvent } from "@/lib/analytics";
 
 // Phase 1: Mercado Pago is the only visible checkout. Shopify remains fully
 // implemented below as a temporary fallback and can be re-enabled deliberately.
@@ -401,6 +402,7 @@ function PedidoView() {
     setLegalError(null);
     let redirecting = false;
     try {
+      trackVisualSkinEvent({event_name:"add_payment_info",order_id:order.id});
       const result = await createMercadoPagoCheckoutPro({ data: { orderId: order.id } });
       redirecting = true;
       window.location.assign(result.checkoutUrl);
@@ -415,6 +417,12 @@ function PedidoView() {
       }
     }
   }, [order, processing, legalConfirmedThisVisit]);
+
+  useEffect(() => {
+    if (order?.payment_status === "approved" && sessionReady) {
+      trackVisualSkinEvent({ event_name: "purchase", order_id: order.id });
+    }
+  }, [order?.id, order?.payment_status, sessionReady]);
 
   useEffect(() => {
     if (!sessionReady || !mpReturn || !returnPaymentId) return;

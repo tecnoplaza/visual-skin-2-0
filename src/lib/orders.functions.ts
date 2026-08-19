@@ -1510,6 +1510,27 @@ async function requireOrderSession(orderId: string): Promise<string> {
   return s.orderId;
 }
 
+const AnalyticsPurchaseInput = z.object({
+  orderId: z.string().uuid(),
+  sessionId: z.string().regex(/^vs_s_[A-Za-z0-9_-]{16,80}$/),
+  anonymousId: z.string().regex(/^vs_a_[A-Za-z0-9_-]{16,80}$/),
+});
+
+// Analytics-only bridge: reuses the canonical HttpOnly order session and never
+// trusts browser payment state, amount, currency or line items.
+export const claimApprovedPurchase = createServerFn({ method: "POST" })
+  .inputValidator((i) => AnalyticsPurchaseInput.parse(i))
+  .handler(async ({ data }) => {
+    await requireOrderSession(data.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await supabaseAdmin.rpc(
+      "claim_approved_purchase_event" as any,
+      { p_order_id: data.orderId, p_session_id: data.sessionId, p_anonymous_id: data.anonymousId } as any,
+    );
+    if (error) throw new Error("No se pudo registrar la compra");
+    return result as any;
+  });
+
 /** Convenience: load session + enforce CSRF header for mutating fns. */
 async function requireOrderSessionAndCsrf(
   orderId: string,

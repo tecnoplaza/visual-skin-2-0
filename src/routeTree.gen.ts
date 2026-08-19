@@ -21,8 +21,10 @@ import { Route as PersonalizadorRouteImport } from './routes/personalizador'
 import { Route as PrivacidadRouteImport } from './routes/privacidad'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as TerminosRouteImport } from './routes/terminos'
+import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 import { Route as AdminOrdersRouteImport } from './routes/admin.orders'
 import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
+import { Route as AdminAnalyticsSettingsRouteImport } from './routes/admin.analytics.settings'
 import { Route as AdminOrdersIdRouteImport } from './routes/admin.orders.$id'
 import { Route as ApiPublicHooksCleanupRouteImport } from './routes/api/public/hooks/cleanup'
 import { Route as ApiPublicHooksCspReportRouteImport } from './routes/api/public/hooks/csp-report'
@@ -90,6 +92,11 @@ const TerminosRoute = TerminosRouteImport.update({
   path: '/terminos',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminOrdersRoute = AdminOrdersRouteImport.update({
   id: '/orders',
   path: '/orders',
@@ -99,6 +106,11 @@ const PedidoIdRoute = PedidoIdRouteImport.update({
   id: '/pedido/$id',
   path: '/pedido/$id',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminAnalyticsSettingsRoute = AdminAnalyticsSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AdminAnalyticsRoute,
 } as any)
 const AdminOrdersIdRoute = AdminOrdersIdRouteImport.update({
   id: '/$id',
@@ -147,8 +159,10 @@ export interface FileRoutesByFullPath {
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
+  '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
@@ -169,8 +183,10 @@ export interface FileRoutesByTo {
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
+  '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
@@ -192,8 +208,10 @@ export interface FileRoutesById {
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
+  '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
   '/api/public/hooks/csp-report': typeof ApiPublicHooksCspReportRoute
@@ -216,8 +234,10 @@ export interface FileRouteTypes {
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
+    | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
@@ -238,8 +258,10 @@ export interface FileRouteTypes {
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
+    | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
@@ -260,8 +282,10 @@ export interface FileRouteTypes {
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
+    | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
     | '/api/public/hooks/csp-report'
@@ -377,6 +401,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TerminosRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/analytics': {
+      id: '/admin/analytics'
+      path: '/analytics'
+      fullPath: '/admin/analytics'
+      preLoaderRoute: typeof AdminAnalyticsRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/orders': {
       id: '/admin/orders'
       path: '/orders'
@@ -390,6 +421,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/pedido/$id'
       preLoaderRoute: typeof PedidoIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/analytics/settings': {
+      id: '/admin/analytics/settings'
+      path: '/settings'
+      fullPath: '/admin/analytics/settings'
+      preLoaderRoute: typeof AdminAnalyticsSettingsRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
     }
     '/admin/orders/$id': {
       id: '/admin/orders/$id'
@@ -436,6 +474,18 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AdminAnalyticsRouteChildren {
+  AdminAnalyticsSettingsRoute: typeof AdminAnalyticsSettingsRoute
+}
+
+const AdminAnalyticsRouteChildren: AdminAnalyticsRouteChildren = {
+  AdminAnalyticsSettingsRoute: AdminAnalyticsSettingsRoute,
+}
+
+const AdminAnalyticsRouteWithChildren = AdminAnalyticsRoute._addFileChildren(
+  AdminAnalyticsRouteChildren,
+)
+
 interface AdminOrdersRouteChildren {
   AdminOrdersIdRoute: typeof AdminOrdersIdRoute
 }
@@ -449,10 +499,12 @@ const AdminOrdersRouteWithChildren = AdminOrdersRoute._addFileChildren(
 )
 
 interface AdminRouteChildren {
+  AdminAnalyticsRoute: typeof AdminAnalyticsRouteWithChildren
   AdminOrdersRoute: typeof AdminOrdersRouteWithChildren
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminAnalyticsRoute: AdminAnalyticsRouteWithChildren,
   AdminOrdersRoute: AdminOrdersRouteWithChildren,
 }
 

@@ -48,6 +48,19 @@ const MP_IMG_HOSTS = [
   "https://www.mercadopago.com",
 ];
 
+// Consent-gated advertising/analytics SDKs. Adding CSP origins does not load
+// them; AnalyticsManager does that only after the matching consent.
+const ANALYTICS_HOSTS = [
+  "https://connect.facebook.net",
+  "https://www.facebook.com",
+  "https://www.googletagmanager.com",
+  "https://www.google-analytics.com",
+  "https://analytics.google.com",
+  "https://googleads.g.doubleclick.net",
+  "https://analytics.tiktok.com",
+  "https://business-api.tiktok.com",
+];
+
 function supabaseHosts(): string[] {
   const hosts = new Set<string>();
   try {
@@ -76,12 +89,12 @@ function buildCsp(variant: CspVariant): string {
   const self = "'self'";
   const scriptParts: string[] = [self];
   if (variant === "applied") scriptParts.push("'unsafe-inline'", "'unsafe-eval'");
-  scriptParts.push(...MP_HOSTS);
+  scriptParts.push(...MP_HOSTS, ...ANALYTICS_HOSTS);
   const script = scriptParts.join(" ");
   const styleUrls = [self, "'unsafe-inline'", "https://http2.mlstatic.com"].join(" ");
-  const img = [self, "data:", "blob:", ...supa, ...MP_IMG_HOSTS].join(" ");
+  const img = [self, "data:", "blob:", ...supa, ...MP_IMG_HOSTS, ...ANALYTICS_HOSTS].join(" ");
   const font = [self, "data:", "https://http2.mlstatic.com"].join(" ");
-  const connect = [self, ...supa, ...MP_HOSTS, site].filter(Boolean).join(" ");
+  const connect = [self, ...supa, ...MP_HOSTS, ...ANALYTICS_HOSTS, site].filter(Boolean).join(" ");
   const frame = [self, ...MP_FRAME_HOSTS].join(" ");
   const worker = [self, "blob:"].join(" ");
   return [

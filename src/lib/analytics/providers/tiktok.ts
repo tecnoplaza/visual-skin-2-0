@@ -1,0 +1,5 @@
+import type { AnalyticsSetting, VisualSkinEvent } from "../types";
+declare global { interface Window { ttq?: any } }
+const names: Record<string,string>={page_view:"PageView",view_item:"ViewContent",add_to_cart:"AddToCart",begin_checkout:"InitiateCheckout",add_payment_info:"AddPaymentInfo",purchase:"CompletePayment"};
+export function loadTikTok(setting:AnalyticsSetting){ if(!setting.enabled||!setting.public_id||window.ttq)return; const ttq:any=[]; ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"]; ttq.methods.forEach((m:string)=>ttq[m]=(...a:any[])=>ttq.push([m,...a])); window.ttq=ttq; const s=document.createElement("script");s.async=true;s.src="https://analytics.tiktok.com/i18n/pixel/events.js";document.head.appendChild(s);ttq.push(["load",setting.public_id]);}
+export function sendTikTok(e:VisualSkinEvent){const n=names[e.event_name];if(n&&window.ttq)window.ttq.track(n,{value:e.value,currency:e.currency,contents:e.items});}
