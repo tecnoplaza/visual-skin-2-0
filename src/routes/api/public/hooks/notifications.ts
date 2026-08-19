@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { timingSafeEqual } from "crypto";
-import { getServerConfig } from "@/lib/server-config";
+import { getServerConfig, type ServerConfig } from "@/lib/server-config";
+import {
+  handleAuthenticatedNotificationRequest,
+  type NotificationMethod,
+} from "@/lib/notification-worker-http";
 import {
   containsSensitiveNotificationData,
   renderNotificationEmail,
@@ -20,12 +23,6 @@ const response = (body: unknown, status = 200) =>
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
-
-function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
 
 async function sendWithResend(
   apiKey: string,
@@ -47,17 +44,7 @@ async function sendWithResend(
   if (!r.ok) throw new Error(`email_provider_http_${r.status}`);
 }
 
-async function dispatch(request: Request): Promise<Response> {
-  let cfg;
-  try {
-    cfg = getServerConfig();
-  } catch {
-    return response({ ok: false, error: "server_misconfigured" }, 500);
-  }
-  if (!cfg.notificationCronSecret) return response({ ok: false, error: "endpoint_disabled" }, 503);
-  const match = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "");
-  if (!match || !safeEqual(match[1].trim(), cfg.notificationCronSecret))
-    return response({ ok: false, error: "unauthorized" }, 401);
+async function processNotificationOutbox(cfg: ServerConfig): Promise<Response> {
   if (
     !cfg.emailProviderConfigured ||
     cfg.emailProvider !== "resend" ||
@@ -99,12 +86,29 @@ async function dispatch(request: Request): Promise<Response> {
   return response({ ok: true, claimed: rows.length, sent, failed });
 }
 
+type ConfigReader = () => ServerConfig;
+type Worker = (config: ServerConfig) => Promise<Response>;
+
+export async function handleNotificationRequest(
+  request: Request,
+  method: NotificationMethod,
+  readConfig: ConfigReader = getServerConfig,
+  worker: Worker = processNotificationOutbox,
+): Promise<Response> {
+  let cfg: ServerConfig;
+  try {
+    cfg = readConfig();
+  } catch {
+    return response({ ok: false, error: "server_misconfigured" }, 500);
+  }
+  return handleAuthenticatedNotificationRequest(request, method, cfg, worker);
+}
+
 export const Route = createFileRoute("/api/public/hooks/notifications")({
   server: {
     handlers: {
-      POST: async ({ request }) => dispatch(request),
-      GET: async () =>
-        new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } }),
+      POST: async ({ request }) => handleNotificationRequest(request, "POST"),
+      GET: async ({ request }) => handleNotificationRequest(request, "GET"),
     },
   },
 });

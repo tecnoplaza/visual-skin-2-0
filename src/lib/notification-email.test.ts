@@ -137,6 +137,13 @@ describe("notification email rendering", () => {
     }
     assert.equal(containsSensitiveNotificationData(payload), false);
   });
+
+  it("uses VisualSkin Chile branding in HTML and plain text", () => {
+    const message = renderNotificationEmail("payment_approved", payload, origin);
+    assert.match(message.html, />VisualSkin Chile</);
+    assert.match(message.text, /\nVisualSkin Chile$/);
+    assert.doesNotMatch(`${message.html}${message.text}`, /Â|Ã|â/);
+  });
 });
 
 function escapeRegex(value: string): string {

@@ -53,6 +53,7 @@ const RawSchema = z.object({
   VISUALSKIN_EMAIL_FROM: z.string().min(3).max(320).optional(),
   VISUALSKIN_ADMIN_NOTIFICATION_EMAIL: z.string().email().optional(),
   NOTIFICATION_CRON_SECRET: z.string().min(32).optional(),
+  CRON_SECRET: z.string().min(32).optional(),
   // URL base del proyecto Supabase para el cliente administrativo.
   // Lovable reserva el prefijo SUPABASE_ para secretos, por eso este nombre.
   VISUALSKIN_SUPABASE_ADMIN_URL: z.string().optional(),
@@ -92,6 +93,7 @@ export type ServerConfig = {
   emailFrom: string | null;
   adminNotificationEmail: string | null;
   notificationCronSecret: string | null;
+  cronSecret: string | null;
   isProduction: boolean;
 };
 
@@ -279,6 +281,7 @@ export function getServerConfig(): ServerConfig {
     emailFrom: raw.VISUALSKIN_EMAIL_FROM ?? null,
     adminNotificationEmail: raw.VISUALSKIN_ADMIN_NOTIFICATION_EMAIL ?? null,
     notificationCronSecret: raw.NOTIFICATION_CRON_SECRET ?? null,
+    cronSecret: raw.CRON_SECRET ?? null,
     isProduction,
   };
   cached = resolved;

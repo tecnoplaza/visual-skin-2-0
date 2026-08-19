@@ -42,7 +42,7 @@ function productsFrom(payload: Payload): Product[] {
     const product = value as Payload;
     const quantity = Number(product.quantity);
     if (!Number.isInteger(quantity) || quantity <= 0) return [];
-    return [{ packType: String(product.pack_type ?? "Producto VisualSkin"), quantity }];
+    return [{ packType: String(product.pack_type ?? "Producto VisualSkin Chile"), quantity }];
   });
 }
 
@@ -93,7 +93,7 @@ function contentFor(eventType: string, order: string): EmailContent {
         title: "Tu pedido entró en producción",
         paragraphs: [
           "Tu diseño ya entró a producción.",
-          "Estamos preparando tu pedido VisualSkin.",
+          "Estamos preparando tu pedido VisualSkin Chile.",
         ],
         cta: "Ver mi pedido",
       };
@@ -112,7 +112,7 @@ function contentFor(eventType: string, order: string): EmailContent {
     case "completed":
       return {
         title: "Pedido completado",
-        paragraphs: ["Tu pedido ha sido completado.", "Gracias por elegir VisualSkin."],
+        paragraphs: ["Tu pedido ha sido completado.", "Gracias por elegir VisualSkin Chile."],
         cta: "Ver mi pedido",
       };
     case "refunded":
@@ -207,7 +207,7 @@ export function renderNotificationEmail(
     );
   }
   if (content.showReason && reason) textLines.push("", `Motivo: ${reason}`);
-  textLines.push("", `${content.cta}: ${href}`, "", "VisualSkin");
+  textLines.push("", `${content.cta}: ${href}`, "", "VisualSkin Chile");
 
   const productHtml = content.showProducts
     ? `<div style="margin:24px 0"><p style="margin:0 0 8px;font-weight:700">Productos</p><ul style="margin:0;padding-left:20px">${
@@ -227,7 +227,7 @@ export function renderNotificationEmail(
   const reasonHtml = content.showReason && reason ? `<p style="margin:20px 0"><strong>Motivo:</strong> ${esc(reason)}</p>` : "";
   const paragraphsHtml = content.paragraphs.map((paragraph) => `<p style="margin:0 0 14px;line-height:1.6">${esc(paragraph)}</p>`).join("");
 
-  const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#111827"><div style="max-width:600px;margin:0 auto;padding:24px"><div style="background:#111827;color:#ffffff;padding:20px;border-radius:14px 14px 0 0;font-size:22px;font-weight:700">VisualSkin</div><div style="background:#ffffff;padding:28px;border-radius:0 0 14px 14px"><h1 style="margin:0 0 22px;font-size:24px;line-height:1.25">${esc(content.title)}</h1><p style="margin:0 0 18px">Hola ${esc(name)},</p>${paragraphsHtml}${productHtml}${amountsHtml}${adminSummaryHtml}${reasonHtml}<a href="${esc(href)}" style="display:inline-block;margin-top:12px;background:#2563eb;color:#ffffff;text-decoration:none;padding:13px 20px;border-radius:8px;font-weight:700">${esc(content.cta)}</a><p style="margin:30px 0 0;color:#6b7280;font-size:13px">VisualSkin</p></div></div></body></html>`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#111827"><div style="max-width:600px;margin:0 auto;padding:24px"><div style="background:#111827;color:#ffffff;padding:20px;border-radius:14px 14px 0 0;font-size:22px;font-weight:700">VisualSkin Chile</div><div style="background:#ffffff;padding:28px;border-radius:0 0 14px 14px"><h1 style="margin:0 0 22px;font-size:24px;line-height:1.25">${esc(content.title)}</h1><p style="margin:0 0 18px">Hola ${esc(name)},</p>${paragraphsHtml}${productHtml}${amountsHtml}${adminSummaryHtml}${reasonHtml}<a href="${esc(href)}" style="display:inline-block;margin-top:12px;background:#2563eb;color:#ffffff;text-decoration:none;padding:13px 20px;border-radius:8px;font-weight:700">${esc(content.cta)}</a><p style="margin:30px 0 0;color:#6b7280;font-size:13px">VisualSkin Chile</p></div></div></body></html>`;
 
   return { subject, html, text: textLines.join("\n") };
 }
