@@ -3,13 +3,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { getAnalyticsIdentity, captureAttribution, getConsent, saveConsent } from "./identity";
-import { loadMeta } from "./providers/meta";
+import { loadMeta, sendMeta } from "./providers/meta";
 import { configureGoogleAds, loadGoogle } from "./providers/google";
 import { loadTikTok } from "./providers/tiktok";
 
 class StorageMock { private values=new Map<string,string>(); getItem(k:string){return this.values.get(k)??null} setItem(k:string,v:string){this.values.set(k,String(v))} clear(){this.values.clear()} }
 const migration=readFileSync(new URL("../../../supabase/migrations/20260819020000_visualskin_analytics.sql",import.meta.url),"utf8");
 const endpoint=readFileSync(new URL("./analytics.functions.ts",import.meta.url),"utf8");
+const analyticsClient=readFileSync(new URL("./index.ts",import.meta.url),"utf8");
 describe("VisualSkin analytics privacy and identity",()=>{
   beforeEach(()=>{vi.stubGlobal("localStorage",new StorageMock());vi.stubGlobal("sessionStorage",new StorageMock());vi.stubGlobal("location",{search:"",pathname:"/catalogo"});vi.stubGlobal("document",{referrer:"",head:{appendChild:vi.fn()},createElement:()=>({})});vi.stubGlobal("window",{dispatchEvent:vi.fn()});vi.stubGlobal("crypto",{randomUUID:()=>"12345678-1234-4234-8234-123456789abc"});});
   it("creates stable anonymous and session ids without PII",()=>{const a=getAnalyticsIdentity(),b=getAnalyticsIdentity();expect(a).toEqual(b);expect(a.anonymousId).toMatch(/^vs_a_/);expect(a.sessionId).toMatch(/^vs_s_/);expect(JSON.stringify(a)).not.toMatch(/email|phone|address/i)});
@@ -19,11 +20,16 @@ describe("VisualSkin analytics privacy and identity",()=>{
 describe("provider loading guards",()=>{
   beforeEach(()=>{vi.stubGlobal("document",{head:{appendChild:vi.fn()},createElement:()=>({})});vi.stubGlobal("window",{});});
   it("does not load disabled Meta",()=>{loadMeta({provider:"meta",enabled:false,public_id:"12345",conversion_id:null,conversion_label:null});expect((document.head.appendChild as any)).not.toHaveBeenCalled()});
-  it("loads configured Meta id",()=>{loadMeta({provider:"meta",enabled:true,public_id:"12345",conversion_id:null,conversion_label:null});expect((document.head.appendChild as any)).toHaveBeenCalled();expect((window as any).fbq).toBeTypeOf("function")});
+  it("loads configured Meta id once",()=>{const setting={provider:"meta" as const,enabled:true,public_id:"158527017237409",conversion_id:null,conversion_label:null};loadMeta(setting);loadMeta(setting);expect(document.head.appendChild).toHaveBeenCalledTimes(1);expect((document.head.appendChild as any).mock.calls[0][0].src).toBe("https://connect.facebook.net/en_US/fbevents.js");expect((window as any).fbq.queue).toContainEqual(["init","158527017237409"])});
+  it("forwards Meta events after the SDK installs callMethod",()=>{loadMeta({provider:"meta",enabled:true,public_id:"158527017237409",conversion_id:null,conversion_label:null});const callMethod=vi.fn();(window as any).fbq.callMethod=callMethod;sendMeta({event_name:"page_view"});expect(callMethod).toHaveBeenCalledWith("track","PageView",expect.any(Object))});
   it("loads configured GA4",()=>{loadGoogle({provider:"ga4",enabled:true,public_id:"G-TEST1234",conversion_id:null,conversion_label:null});expect((document.head.appendChild as any)).toHaveBeenCalled();expect((window as any).gtag).toBeTypeOf("function")});
   it("loads Google Ads without requiring GA4",()=>{configureGoogleAds({provider:"google_ads",enabled:true,public_id:null,conversion_id:"AW-123456",conversion_label:"sale"});expect((document.head.appendChild as any)).toHaveBeenCalled();expect((window as any).gtag).toBeTypeOf("function")});
   it("loads configured TikTok",()=>{loadTikTok({provider:"tiktok",enabled:true,public_id:"ABCDEFGHIJKL",conversion_id:null,conversion_label:null});expect((document.head.appendChild as any)).toHaveBeenCalled();expect((window as any).ttq).toBeTruthy()});
   it("does not emit page views while merely loading SDKs",()=>{loadMeta({provider:"meta",enabled:true,public_id:"12345",conversion_id:null,conversion_label:null});expect((window as any).fbq.queue.flat()).not.toContain("PageView")});
+});
+describe("provider consent contract",()=>{
+  it("does not initialize Meta without marketing consent",()=>expect(analyticsClient).toMatch(/if\(consent\.marketing\)\{const meta=/));
+  it("allows marketing events without first-party analytics consent",()=>expect(analyticsClient).toContain("if(consent.analytics){const identity="));
 });
 describe("database security contract",()=>{
   it("forbids client purchase insertion",()=>expect(migration).toContain("purchase_requires_backend_claim"));
