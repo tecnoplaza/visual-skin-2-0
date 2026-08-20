@@ -813,6 +813,7 @@ export const createSecureOrder = createServerFn({ method: "POST" })
 // ------------------------------------------------------------------
 
 const DESIGN_BUCKET = "order-designs";
+const PREVIEW_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const DESIGN_MAX_BYTES = 15 * 1024 * 1024;
 const DESIGN_ALLOWED_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
 const DESIGN_EXT: Record<string, string> = {
@@ -1390,6 +1391,20 @@ export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
           .eq("kind", original.kind).eq("file_path", original.path);
       }
       const previewPaths = [data.casePreviewPath, data.garmentPreviewPath, data.secondaryGarmentPreviewPath].filter(Boolean) as string[];
+      const previewRows = [
+        ["case", data.casePreviewPath],
+        ["garment", data.garmentPreviewPath],
+        ["secondary_garment", data.secondaryGarmentPreviewPath],
+      ].filter((entry): entry is [string, string] => Boolean(entry[1])).map(([slot, storagePath]) => ({
+        order_id: session.orderId,
+        order_item_id: data.orderItemId,
+        slot,
+        storage_path: storagePath,
+      }));
+      const { error: previewError } = await (supabaseAdmin as any).from("order_item_previews")
+        .upsert(previewRows, { onConflict: "order_item_id,slot" });
+      if (previewError) throw new Error("No se pudieron persistir las previews del producto");
+      // Keep the legacy columns populated during the compatibility window.
       await supabaseAdmin.from("final_designs").update({
         case_preview_url: data.casePreviewPath,
         garment_preview_url: data.garmentPreviewPath ?? null,
@@ -1778,32 +1793,12 @@ export const getActiveCart = createServerFn({ method: "GET" })
     if (["approved", "refunded", "charged_back"].includes(order.payment_status)) return null;
     const items = await getOrderItemsByOrderId(orderId);
     const itemIds = items.filter((item) => item.is_active).map((item) => item.id);
-    const { data: finalDesigns } = itemIds.length > 0
-      ? await supabaseAdmin.from("final_designs")
-          .select("order_item_id,case_preview_url,garment_preview_url,secondary_garment_preview_url")
-          .eq("order_id", orderId)
-          .in("order_item_id", itemIds)
-      : { data: [] };
-    const previews = new Map<string, string>();
-    await Promise.all((finalDesigns ?? []).flatMap((design) => ([
-      ["case", design.case_preview_url],
-      ["garment", design.garment_preview_url],
-      ["secondary_garment", design.secondary_garment_preview_url],
-    ] as const).map(async ([kind, path]) => {
-      if (!design.order_item_id || !path) return;
-      const { data: signed } = await supabaseAdmin.storage.from(DESIGN_BUCKET).createSignedUrl(path, 10 * 60);
-      if (signed?.signedUrl) previews.set(`${design.order_item_id}:${kind}`, signed.signedUrl);
-    })));
+    const previews = await resolveOrderItemPreviews(supabaseAdmin, orderId, itemIds);
     return {
       order,
       items: items.map((item) => ({
         ...item,
-        preview_url: previews.get(`${item.id}:case`) ?? null,
-        preview_urls: {
-          case: previews.get(`${item.id}:case`) ?? null,
-          garment: previews.get(`${item.id}:garment`) ?? null,
-          secondary_garment: previews.get(`${item.id}:secondary_garment`) ?? null,
-        },
+        previews: previews.get(item.id) ?? [],
       })),
     };
   });
@@ -2156,6 +2151,8 @@ export const getOrderBySession = createServerFn({ method: "POST" })
     const secondaryGarmentUrl =
       (await signPath(orderRow.secondary_garment_file_path ?? null)) ??
       orderRow.secondary_garment_design_url ?? null;
+    const items = (await getOrderItemsByOrderId(orderId)).filter((item) => item.is_active);
+    const itemPreviews = await resolveOrderItemPreviews(supabaseAdmin, orderId, items.map((item) => item.id));
 
     // Do not leak internal storage paths to the browser.
     delete orderRow.case_file_path;
@@ -2198,6 +2195,7 @@ export const getOrderBySession = createServerFn({ method: "POST" })
       hasActiveAttempt,
       activeAttemptStatus,
       canRetryPayment,
+      items: items.map((item) => ({ ...item, previews: itemPreviews.get(item.id) ?? [] })),
     };
   });
 
@@ -3306,6 +3304,36 @@ type CompatibleOrderItem = OrderItem & {
   source: "order_items" | "legacy";
 };
 
+async function resolveOrderItemPreviews(
+  supabaseAdmin: any,
+  orderId: string,
+  itemIds: string[],
+): Promise<Map<string, Array<{ slot: string; url: string }>>> {
+  const { groupSignedOrderItemPreviews } = await import("@/lib/order-item-previews");
+  if (itemIds.length === 0) return new Map();
+  const { data: rows, error } = await supabaseAdmin.from("order_item_previews")
+    .select("order_id,order_item_id,slot,storage_path")
+    .eq("order_id", orderId).in("order_item_id", itemIds).order("created_at");
+  if (error) throw new Error("No se pudieron consultar las previews del pedido");
+  const signedRows: Array<{ order_item_id: string; slot: string; url: string }> = [];
+  await Promise.all((rows ?? []).map(async (row: any) => {
+    const path = String(row.storage_path ?? "");
+    const itemId = String(row.order_item_id ?? "");
+    if (!itemIds.includes(itemId) || !path.startsWith(`${orderId}/${itemId}/`) || path.includes("..") || path.includes("//")) {
+      console.warn("[order-preview] invalid persisted namespace", { orderId, orderItemId: itemId, slot: row.slot });
+      return;
+    }
+    const { data: signed, error: signError } = await supabaseAdmin.storage
+      .from(DESIGN_BUCKET).createSignedUrl(path, PREVIEW_SIGNED_URL_TTL_SECONDS);
+    if (signError || !signed?.signedUrl) {
+      console.warn("[order-preview] signing failed", { orderId, orderItemId: itemId, slot: row.slot });
+      return;
+    }
+    signedRows.push({ order_item_id: itemId, slot: String(row.slot), url: signed.signedUrl });
+  }));
+  return groupSignedOrderItemPreviews(signedRows);
+}
+
 async function getOrderItemsByOrderId(
   orderId: string,
 ): Promise<CompatibleOrderItem[]> {
@@ -3423,9 +3451,15 @@ export const adminGetOrderDetails = createServerFn({ method: "POST" })
         .order("created_at", { ascending: false }),
     ]);
     if (!order) throw new Error("Pedido no encontrado");
+    const adminItems = (items ?? []) as any[];
+    const itemPreviews = await resolveOrderItemPreviews(
+      supabaseAdmin,
+      data.orderId,
+      adminItems.map((item) => String(item.id)),
+    );
     return {
       order: order as any,
-      items: (items ?? []) as any[],
+      items: adminItems.map((item) => ({ ...item, previews: itemPreviews.get(String(item.id)) ?? [] })),
       finalDesigns: (fd ?? []) as any[],
       // Legacy rows are ambiguous: the previous client stored rendered previews
       // here. Never offer one as an original unless it is explicitly marked.

@@ -12,6 +12,8 @@ import {
 import { toast } from "sonner";
 import { productionDisplayLabel, shouldShowProductionControls } from "@/lib/production-display";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
+import { cartPackLabel } from "@/lib/cart";
+import { previewSlotLabel } from "@/lib/order-item-previews";
 
 export const Route = createFileRoute("/admin/orders/$id")({
   component: AdminOrderDetailRoute,
@@ -321,6 +323,40 @@ function Detail({ id }: { id: string }) {
             <KV k="Talla" v={snap.garment.size ?? "—"} />
           </>
         )}
+      </Card>
+
+      <Card title="Previews del pedido">
+        <div className="space-y-4">
+          {data.items.map((item: any, index: number) => (
+            <div key={item.id} className="rounded border border-border p-3">
+              <div className="mb-3 text-xs">
+                <div className="font-semibold">Producto {index + 1} · {cartPackLabel(item.pack_type)}</div>
+                <div className="text-muted-foreground">
+                  {[item.brand, item.phone_model].filter(Boolean).join(" · ") || "Modelo no registrado"}
+                </div>
+              </div>
+              {item.previews?.length ? (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                  {item.previews.map((preview: any) => (
+                    <figure key={preview.slot} className="min-w-0">
+                      <div className="aspect-square overflow-hidden rounded border border-border bg-background">
+                        <img src={preview.url} alt={`${previewSlotLabel(preview.slot)} del producto ${index + 1}`} className="h-full w-full object-contain p-2" />
+                      </div>
+                      <figcaption className="mt-1 text-center text-[10px] text-muted-foreground">
+                        {previewSlotLabel(preview.slot)}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+                  Preview no disponible
+                </div>
+              )}
+            </div>
+          ))}
+          {data.items.length === 0 && <div className="text-xs text-muted-foreground">Sin productos asociados.</div>}
+        </div>
       </Card>
 
       <Card title="Archivos originales del cliente">

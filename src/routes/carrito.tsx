@@ -104,14 +104,15 @@ function CartPage() {
               <article key={item.id} className="rounded-2xl border border-border bg-card p-5">
                 <div className="flex flex-col gap-5 sm:flex-row sm:justify-between">
                   <div className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"} sm:w-auto`}>
+                    {previews.length === 0 && (
+                      <div className="flex h-24 w-24 items-center justify-center rounded-xl border border-border bg-background px-2 text-center text-[10px] leading-tight text-muted-foreground sm:h-28">
+                        Preview no disponible
+                      </div>
+                    )}
                     {previews.map((preview) => (
                       <figure key={preview.kind} className="min-w-0">
                         <div className="flex h-24 min-w-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-background sm:h-28 sm:w-24">
-                          {preview.url ? (
-                            <img src={preview.url} alt={`${preview.label} del producto ${index + 1}`} className="h-full w-full object-contain p-1.5" />
-                          ) : (
-                            <div className="px-2 text-center text-[10px] leading-tight text-muted-foreground">Preview no disponible</div>
-                          )}
+                          <img src={preview.url} alt={`${preview.label} del producto ${index + 1}`} className="h-full w-full object-contain p-1.5" />
                         </div>
                         <figcaption className="mt-1 text-center text-[10px] font-medium text-muted-foreground">{preview.label}</figcaption>
                       </figure>

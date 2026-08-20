@@ -77,6 +77,7 @@ type Order = {
   canRetryPayment?: boolean;
   legal_accepted_at?: string | null;
   legal_acceptance_hash?: string | null;
+  items?: CartItem[];
 };
 
 type Search = {
@@ -116,8 +117,6 @@ function PedidoView() {
   const activeCartQuery = useQuery(activeCartQueryOptions());
   const activeCart = activeCartQuery.data;
   const cartForOrder = activeCart?.order.id === id ? activeCart : null;
-  const cartItems = activeCartItems(cartForOrder);
-
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -129,6 +128,7 @@ function PedidoView() {
   const [legalChecked, setLegalChecked] = useState(false);
   const [legalConfirmedThisVisit, setLegalConfirmedThisVisit] = useState(false);
   const [legalSubmitting, setLegalSubmitting] = useState(false);
+  const cartItems = order?.items ?? activeCartItems(cartForOrder);
   const [legalError, setLegalError] = useState<string | null>(null);
   const [legalAvailable, setLegalAvailable] = useState<boolean | null>(null);
   const [customerSaving, setCustomerSaving] = useState(false);
@@ -842,20 +842,19 @@ function OrderItemSummaryCard({ item, index }: { item: CartItem; index: number }
         <div
           className={`grid shrink-0 gap-2 ${previews.length === 1 ? "grid-cols-1" : previews.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
         >
+          {previews.length === 0 && (
+            <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-border bg-card px-1 text-center text-[9px] leading-tight text-muted-foreground">
+              Preview no disponible
+            </div>
+          )}
           {previews.map((preview) => (
             <figure key={preview.kind} className="min-w-0">
               <div className="flex h-20 items-center justify-center overflow-hidden rounded-lg border border-border bg-card sm:w-20">
-                {preview.url ? (
-                  <img
-                    src={preview.url}
-                    alt={`${preview.label} del producto ${index + 1}`}
-                    className="h-full w-full object-contain p-1"
-                  />
-                ) : (
-                  <span className="px-1 text-center text-[9px] leading-tight text-muted-foreground">
-                    Sin preview
-                  </span>
-                )}
+                <img
+                  src={preview.url}
+                  alt={`${preview.label} del producto ${index + 1}`}
+                  className="h-full w-full object-contain p-1"
+                />
               </div>
               <figcaption className="mt-1 text-center text-[9px] text-muted-foreground">
                 {preview.label}

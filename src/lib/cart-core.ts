@@ -1,4 +1,5 @@
 import type { OrderItem } from "./order-items";
+import { previewSlotLabel, type OrderItemPreview } from "./order-item-previews.ts";
 
 export type CartOrder = {
   id: string;
@@ -15,33 +16,28 @@ export type CartOrder = {
 export type CartPreviewKind = "case" | "garment" | "secondary_garment";
 export type CartItemPreviewUrls = Partial<Record<CartPreviewKind, string | null>>;
 export type CartItem = OrderItem & {
+  previews?: OrderItemPreview[];
   preview_url?: string | null;
   preview_urls?: CartItemPreviewUrls;
 };
 export type ActiveCart = { order: CartOrder; items: CartItem[] };
 
 export type CartPreviewSlot = {
-  kind: CartPreviewKind;
-  label: "Carcasa" | "Polera" | "Polerón";
-  url: string | null;
+  kind: string;
+  label: string;
+  url: string;
 };
 
 export function cartItemPreviewSlots(item: CartItem): CartPreviewSlot[] {
-  const urls = item.preview_urls ?? { case: item.preview_url ?? null };
-  const slots: CartPreviewSlot[] = [
-    { kind: "case", label: "Carcasa", url: urls.case ?? null },
-  ];
-  if (item.pack_type === "carcasa+polera") {
-    slots.push({ kind: "garment", label: "Polera", url: urls.garment ?? null });
-  } else if (item.pack_type === "carcasa+poleron") {
-    slots.push({ kind: "garment", label: "Polerón", url: urls.garment ?? null });
-  } else if (item.pack_type === "carcasa+polera+poleron") {
-    slots.push(
-      { kind: "garment", label: "Polera", url: urls.garment ?? null },
-      { kind: "secondary_garment", label: "Polerón", url: urls.secondary_garment ?? null },
-    );
+  if (item.previews) {
+    return item.previews
+      .filter((preview) => typeof preview.slot === "string" && typeof preview.url === "string" && !!preview.url)
+      .map((preview) => ({ kind: preview.slot, label: previewSlotLabel(preview.slot), url: preview.url }));
   }
-  return slots;
+  const urls = item.preview_urls ?? { case: item.preview_url ?? null };
+  return Object.entries(urls)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !!entry[1])
+    .map(([kind, url]) => ({ kind, label: previewSlotLabel(kind), url }));
 }
 
 export function activeCartItems(cart: ActiveCart | null | undefined): CartItem[] {
