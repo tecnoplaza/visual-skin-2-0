@@ -72,7 +72,7 @@ export const Route = createFileRoute("/personalizador")({
 });
 
 
-type Design = { url: string; x: number; y: number; scale: number; rotate: number };
+type Design = { url: string; x: number; y: number; scale: number; rotate: number; originalFile?: File };
 type PrintArea = { x: number; y: number; width: number; height: number; radius: number; camera?: { x: number; y: number; width: number; height: number } | null };
 type BrandRow = { id: string; name: string; slug: string };
 type ModelRow = {
@@ -568,24 +568,27 @@ function Personalizador() {
                 }
                 await queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY });
 
-                // 3. Upload three files independently.
-                const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
-                const garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", shirtBlob);
-                const secondaryGarmentPath = await uploadOrderItemDesign(orderId, orderItemId, "secondary_garment", hoodieBlob);
+                // Keep exact customer files separate from rendered previews.
+                const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseDesign.originalFile!);
+                const garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", completeShirtDesign.originalFile!);
+                const secondaryGarmentPath = await uploadOrderItemDesign(orderId, orderItemId, "secondary_garment", completeHoodieDesign.originalFile!);
+                const casePreviewPath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
+                const garmentPreviewPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", shirtBlob);
+                const secondaryGarmentPreviewPath = await uploadOrderItemDesign(orderId, orderItemId, "secondary_garment", hoodieBlob);
 
                 // 4. Build design JSON with three layers.
                 const persistedCaseDesign: PersistedDesignLayer = {
-                  assetRef: casePath,
+                  assetRef: casePreviewPath,
                   x: caseDesign.x, y: caseDesign.y,
                   scale: caseDesign.scale, rotate: caseDesign.rotate,
                 };
                 const persistedShirtDesign: PersistedDesignLayer = {
-                  assetRef: garmentPath,
+                  assetRef: garmentPreviewPath,
                   x: completeShirtDesign.x, y: completeShirtDesign.y,
                   scale: completeShirtDesign.scale, rotate: completeShirtDesign.rotate,
                 };
                 const persistedHoodieDesign: PersistedDesignLayer = {
-                  assetRef: secondaryGarmentPath,
+                  assetRef: secondaryGarmentPreviewPath,
                   x: completeHoodieDesign.x, y: completeHoodieDesign.y,
                   scale: completeHoodieDesign.scale, rotate: completeHoodieDesign.rotate,
                 };
@@ -605,6 +608,14 @@ function Personalizador() {
                     casePath,
                     garmentPath,
                     secondaryGarmentPath,
+                    casePreviewPath,
+                    garmentPreviewPath,
+                    secondaryGarmentPreviewPath,
+                    originalFilenames: {
+                      case: caseDesign.originalFile!.name,
+                      garment: completeShirtDesign.originalFile!.name,
+                      secondary_garment: completeHoodieDesign.originalFile!.name,
+                    },
                     designJson: persistedDesignJson,
                   },
                 });
@@ -668,15 +679,18 @@ function Personalizador() {
 
 
               // 3. Request signed uploads and push each blob to the private bucket.
-              const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
+              const casePath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseDesign.originalFile!);
+              const casePreviewPath = await uploadOrderItemDesign(orderId, orderItemId, "case", caseBlob);
               let garmentPath: string | null = null;
+              let garmentPreviewPath: string | null = null;
               if (garmentBlob) {
-                garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", garmentBlob);
+                garmentPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", shirtDesign!.originalFile!);
+                garmentPreviewPath = await uploadOrderItemDesign(orderId, orderItemId, "garment", garmentBlob);
               }
 
               // 4. Build persisted design JSON (server-safe, no blob: URLs).
               const persistedCaseDesign: PersistedDesignLayer = {
-                assetRef: casePath,
+                assetRef: casePreviewPath,
                 x: caseDesign.x,
                 y: caseDesign.y,
                 scale: caseDesign.scale,
@@ -685,7 +699,7 @@ function Personalizador() {
               const persistedGarmentDesign: PersistedDesignLayer | null =
                 garmentPath && shirtDesign
                   ? {
-                      assetRef: garmentPath,
+                      assetRef: garmentPreviewPath!,
                       x: shirtDesign.x,
                       y: shirtDesign.y,
                       scale: shirtDesign.scale,
@@ -706,6 +720,12 @@ function Personalizador() {
                   orderId, orderItemId,
                   casePath,
                   garmentPath,
+                  casePreviewPath,
+                  garmentPreviewPath,
+                  originalFilenames: {
+                    case: caseDesign.originalFile!.name,
+                    ...(shirtDesign?.originalFile ? { garment: shirtDesign.originalFile.name } : {}),
+                  },
                   designJson: persistedDesignJson,
                 },
               });
@@ -860,7 +880,7 @@ function CaseDesignCanvas({
   const onFile = (f: File | undefined) => {
     if (!f) return;
     const url = URL.createObjectURL(f);
-    onChange({ url, x: 0, y: 0, scale: 1, rotate: 0 });
+    onChange({ url, x: 0, y: 0, scale: 1, rotate: 0, originalFile: f });
   };
 
   if (!model) {
@@ -990,7 +1010,7 @@ function StepShirt({
   const onFile = (f: File | undefined) => {
     if (!f) return;
     const url = URL.createObjectURL(f);
-    onChange({ url, x: 0, y: 0, scale: 1, rotate: 0 });
+    onChange({ url, x: 0, y: 0, scale: 1, rotate: 0, originalFile: f });
   };
 
   return (

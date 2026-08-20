@@ -1223,6 +1223,14 @@ export const requestOrderItemDesignUpload = createServerFn({ method: "POST" })
 
 const FinalizeOrderItemInput = FinalizeInput.extend({
   orderItemId: z.string().uuid(),
+  casePreviewPath: z.string().min(1).max(300),
+  garmentPreviewPath: z.string().min(1).max(300).nullable().optional(),
+  secondaryGarmentPreviewPath: z.string().min(1).max(300).nullable().optional(),
+  originalFilenames: z.object({
+    case: z.string().min(1).max(255),
+    garment: z.string().min(1).max(255).optional(),
+    secondary_garment: z.string().min(1).max(255).optional(),
+  }),
 });
 
 export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
@@ -1250,6 +1258,9 @@ export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
     if (data.secondaryGarmentPath) {
       assertCanonicalOrderItemDesignPath(data.secondaryGarmentPath, session.orderId, data.orderItemId, "secondary_garment");
     }
+    assertCanonicalOrderItemDesignPath(data.casePreviewPath, session.orderId, data.orderItemId, "case");
+    if (data.garmentPreviewPath) assertCanonicalOrderItemDesignPath(data.garmentPreviewPath, session.orderId, data.orderItemId, "garment");
+    if (data.secondaryGarmentPreviewPath) assertCanonicalOrderItemDesignPath(data.secondaryGarmentPreviewPath, session.orderId, data.orderItemId, "secondary_garment");
     if (!allowGarment && data.garmentPath) throw new Error("Este producto no admite prenda");
     if (allowGarment && !data.garmentPath) throw new Error("Falta el diseño de la prenda");
     if (!allowSecondaryGarment && data.secondaryGarmentPath) throw new Error("Segunda prenda no permitida");
@@ -1297,6 +1308,32 @@ export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
         if (error || !consumed?.ok) throw new Error("No se pudo consumir la autorización");
       }
 
+      const previewEntries: Array<{ path: string; kind: DesignKind }> = [
+        { path: data.casePreviewPath, kind: "case" },
+        ...(data.garmentPreviewPath ? [{ path: data.garmentPreviewPath, kind: "garment" as const }] : []),
+        ...(data.secondaryGarmentPreviewPath ? [{ path: data.secondaryGarmentPreviewPath, kind: "secondary_garment" as const }] : []),
+      ];
+      for (const entry of previewEntries) {
+        const downloaded = await supabaseAdmin.storage.from(DESIGN_BUCKET).download(entry.path);
+        if (downloaded.error || !downloaded.data) throw new Error("Preview no encontrada en el bucket");
+        const previewBlob = downloaded.data as Blob;
+        const previewBytes = new Uint8Array(await previewBlob.arrayBuffer());
+        const previewExt = (entry.path.split(".").pop() ?? "").toLowerCase();
+        const previewValidation = detectAndValidateImage(previewBytes, previewBlob.size, previewBlob.type, previewExt);
+        if (!previewValidation.ok) throw new Error(`preview_${previewValidation.code}`);
+        const { data: consumed, error } = await (supabaseAdmin as any).rpc(
+          "consume_order_item_upload_authorization_v1",
+          {
+            p_order_id: session.orderId, p_order_item_id: data.orderItemId,
+            p_session_id: session.sessionId, p_kind: entry.kind, p_storage_path: entry.path,
+            p_detected_format: previewValidation.image.format,
+            p_detected_width: previewValidation.image.width,
+            p_detected_height: previewValidation.image.height,
+          },
+        );
+        if (error || !consumed?.ok) throw new Error("No se pudo consumir la preview");
+      }
+
       const validated = await validateDesignJson(data.designJson, {
         orderId: session.orderId,
         orderItemId: data.orderItemId,
@@ -1331,6 +1368,35 @@ export const finalizeOrderItemDesigns = createServerFn({ method: "POST" })
         },
       );
       if (error || !result?.ok) throw new Error("No se pudo finalizar el producto");
+      const { sanitizeOriginalFilename } = await import("@/lib/original-assets");
+      const originals = [
+        { kind: "case", path: data.casePath, filename: data.originalFilenames.case },
+        ...(data.garmentPath ? [{ kind: "garment", path: data.garmentPath, filename: data.originalFilenames.garment! }] : []),
+        ...(data.secondaryGarmentPath ? [{ kind: "secondary_garment", path: data.secondaryGarmentPath, filename: data.originalFilenames.secondary_garment! }] : []),
+      ];
+      for (const original of originals) {
+        const auth = await supabaseAdmin.from("order_upload_authorizations")
+          .select("declared_mime,declared_size").eq("order_id", session.orderId)
+          .eq("order_item_id", data.orderItemId).eq("storage_path", original.path).maybeSingle();
+        await supabaseAdmin.from("design_assets").update({
+          file_size_bytes: auth.data?.declared_size ?? null,
+          metadata: {
+            bucket: DESIGN_BUCKET,
+            original_filename: sanitizeOriginalFilename(original.filename),
+            original_mime: auth.data?.declared_mime ?? null,
+            asset_role: "customer_original",
+          },
+        } as any).eq("order_id", session.orderId).eq("order_item_id", data.orderItemId)
+          .eq("kind", original.kind).eq("file_path", original.path);
+      }
+      const previewPaths = [data.casePreviewPath, data.garmentPreviewPath, data.secondaryGarmentPreviewPath].filter(Boolean) as string[];
+      await supabaseAdmin.from("final_designs").update({
+        case_preview_url: data.casePreviewPath,
+        garment_preview_url: data.garmentPreviewPath ?? null,
+        secondary_garment_preview_url: data.secondaryGarmentPreviewPath ?? null,
+      } as any).eq("order_id", session.orderId).eq("order_item_id", data.orderItemId);
+      await supabaseAdmin.from("order_upload_authorizations").update({ status: "finalized", finalized_at: new Date().toISOString() } as any)
+        .eq("order_id", session.orderId).eq("order_item_id", data.orderItemId).in("storage_path", previewPaths);
       return { ok: true as const, lowResolution };
     } catch (error) {
       // Best effort only; the RPC refuses to mutate an item if payment became
@@ -1707,22 +1773,22 @@ export const getActiveCart = createServerFn({ method: "GET" })
     if (["approved", "refunded", "charged_back"].includes(order.payment_status)) return null;
     const items = await getOrderItemsByOrderId(orderId);
     const itemIds = items.filter((item) => item.is_active).map((item) => item.id);
-    const { data: assets } = itemIds.length > 0
-      ? await supabaseAdmin.from("design_assets")
-          .select("order_item_id,file_path,kind")
+    const { data: finalDesigns } = itemIds.length > 0
+      ? await supabaseAdmin.from("final_designs")
+          .select("order_item_id,case_preview_url,garment_preview_url,secondary_garment_preview_url")
           .eq("order_id", orderId)
           .in("order_item_id", itemIds)
-          .in("kind", ["case", "garment", "secondary_garment"])
       : { data: [] };
     const previews = new Map<string, string>();
-    await Promise.all((assets ?? []).map(async (asset) => {
-      if (!asset.order_item_id || !asset.file_path || !asset.kind) return;
-      const previewKey = `${asset.order_item_id}:${asset.kind}`;
-      if (previews.has(previewKey)) return;
-      const { data: signed } = await supabaseAdmin.storage
-        .from(DESIGN_BUCKET).createSignedUrl(asset.file_path, 10 * 60);
-      if (signed?.signedUrl) previews.set(previewKey, signed.signedUrl);
-    }));
+    await Promise.all((finalDesigns ?? []).flatMap((design) => ([
+      ["case", design.case_preview_url],
+      ["garment", design.garment_preview_url],
+      ["secondary_garment", design.secondary_garment_preview_url],
+    ] as const).map(async ([kind, path]) => {
+      if (!design.order_item_id || !path) return;
+      const { data: signed } = await supabaseAdmin.storage.from(DESIGN_BUCKET).createSignedUrl(path, 10 * 60);
+      if (signed?.signedUrl) previews.set(`${design.order_item_id}:${kind}`, signed.signedUrl);
+    })));
     return {
       order,
       items: items.map((item) => ({
@@ -3323,6 +3389,7 @@ export const adminGetOrderDetails = createServerFn({ method: "POST" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const [
       { data: order },
+      { data: items },
       { data: fd },
       { data: da },
       { data: attempts },
@@ -3330,6 +3397,7 @@ export const adminGetOrderDetails = createServerFn({ method: "POST" })
       { data: auths },
     ] = await Promise.all([
       supabaseAdmin.from("custom_orders").select("*").eq("id", data.orderId).maybeSingle(),
+      supabaseAdmin.from("order_items").select("*").eq("order_id", data.orderId).order("position"),
       supabaseAdmin.from("final_designs").select("*").eq("order_id", data.orderId),
       supabaseAdmin.from("design_assets").select("*").eq("order_id", data.orderId),
       supabaseAdmin
@@ -3352,8 +3420,13 @@ export const adminGetOrderDetails = createServerFn({ method: "POST" })
     if (!order) throw new Error("Pedido no encontrado");
     return {
       order: order as any,
+      items: (items ?? []) as any[],
       finalDesigns: (fd ?? []) as any[],
-      designAssets: (da ?? []) as any[],
+      // Legacy rows are ambiguous: the previous client stored rendered previews
+      // here. Never offer one as an original unless it is explicitly marked.
+      designAssets: ((da ?? []) as any[]).filter(
+        (asset) => asset?.metadata?.asset_role === "customer_original",
+      ),
       attempts: (attempts ?? []) as any[],
       events: (events ?? []) as any[],
       authorizations: (auths ?? []) as any[],
@@ -3362,33 +3435,37 @@ export const adminGetOrderDetails = createServerFn({ method: "POST" })
 
 const AdminSignInput = z.object({
   orderId: z.string().uuid(),
-  path: z.string().min(1).max(300),
+  assetId: z.string().uuid(),
 });
 
 async function adminSignOrderPath(
   context: any,
   orderId: string,
-  path: string,
+  assetId: string,
   ttlSeconds: number,
-): Promise<string> {
+): Promise<{ url: string; filename: string }> {
   await requireAdmin(context);
   applyNoStoreHeaders();
-  if (!path.startsWith(`${orderId}/`)) throw new Error("Ruta no pertenece al pedido");
-  if (path.includes("..") || path.includes("//")) throw new Error("Ruta inválida");
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: asset } = await supabaseAdmin.from("design_assets")
+    .select("id,order_id,order_item_id,file_path,metadata")
+    .eq("id", assetId).eq("order_id", orderId).maybeSingle();
+  if (!asset?.file_path || !asset.order_item_id) throw new Error("Original no pertenece al pedido");
+  const path = asset.file_path;
+  if (!path.startsWith(`${orderId}/${asset.order_item_id}/`) || path.includes("..") || path.includes("//")) throw new Error("Ruta inválida");
   const { data: signed, error } = await (supabaseAdmin.storage as any)
     .from(DESIGN_BUCKET)
     .createSignedUrl(path, ttlSeconds);
   if (error || !signed?.signedUrl) throw new Error("No se pudo firmar la URL");
-  return signed.signedUrl as string;
+  const { originalFilename } = await import("@/lib/original-assets");
+  return { url: signed.signedUrl as string, filename: originalFilename(asset.metadata, path) };
 }
 
 export const adminGetOrderDesignSignedUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i) => AdminSignInput.parse(i))
   .handler(async ({ data, context }) => {
-    const url = await adminSignOrderPath(context, data.orderId, data.path, 60 * 5);
-    return { url };
+    return adminSignOrderPath(context, data.orderId, data.assetId, 60 * 5);
   });
 
 // A "production file" is a print-ready render separate from the customer
@@ -3397,7 +3474,7 @@ export const adminGetOrderDesignSignedUrl = createServerFn({ method: "POST" })
 // — it never silently signs the preview and calls it a production file.
 export const adminDownloadProductionFile = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((i) => AdminSignInput.parse(i))
+  .inputValidator((i) => z.object({ orderId: z.string().uuid(), path: z.string().min(1).max(300) }).parse(i))
   .handler(async ({ context }) => {
     await requireAdmin(context);
     applyNoStoreHeaders();

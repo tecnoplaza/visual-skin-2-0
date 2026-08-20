@@ -9,7 +9,7 @@ import {
 } from "@/lib/garment-render-geometry";
 import { cloneGarmentPrintArea, type GarmentPrintArea } from "@/lib/garment-model";
 
-export type Design = { url: string; x: number; y: number; scale: number; rotate: number };
+export type Design = { url: string; x: number; y: number; scale: number; rotate: number; originalFile?: File };
 
 /**
  * Fuente mínima requerida para renderizar el PNG final de una prenda.

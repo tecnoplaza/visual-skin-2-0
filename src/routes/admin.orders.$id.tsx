@@ -80,25 +80,25 @@ function Detail({ id }: { id: string }) {
     load();
   }, [load]);
 
-  const openSigned = async (path: string) => {
+  const openSigned = async (assetId: string) => {
     try {
-      const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, path } });
+      const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, assetId } });
       window.open(r.url, "_blank", "noopener,noreferrer");
     } catch (e: any) {
       toast.error(e.message ?? "Error");
     }
   };
 
-  const downloadOriginal = async (path: string) => {
+  const downloadOriginal = async (assetId: string) => {
     try {
-      const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, path } });
+      const r = await adminGetOrderDesignSignedUrl({ data: { orderId: id, assetId } });
       const res = await fetch(r.url);
       if (!res.ok) throw new Error(`No se pudo descargar el original (${res.status})`);
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
-      a.download = path.split("/").pop() ?? "archivo-original";
+      a.download = r.filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -333,20 +333,24 @@ function Detail({ id }: { id: string }) {
         <div className="grid gap-3 sm:grid-cols-2">
           {data.designAssets.map((a: any) => (
             <div key={a.id} className="rounded border border-border p-3 text-xs">
-              <div className="font-semibold">{originalLabel(a.kind)}</div>
-              <div className="mt-1 font-mono text-[10px] text-muted-foreground">{a.file_path}</div>
+              <div className="font-semibold">
+                Producto {Math.max(1, data.items.findIndex((item: any) => item.id === a.order_item_id) + 1)} · {originalLabel(a.kind)}
+              </div>
+              <div className="mt-1 break-all text-muted-foreground">
+                {a.metadata?.original_filename ?? "archivo-original"}
+              </div>
               <div className="mt-1">
                 Formato: {a.detected_format ?? "?"} · {a.width ?? "?"}×{a.height ?? "?"} px
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
-                  onClick={() => openSigned(a.file_path)}
+                  onClick={() => openSigned(a.id)}
                   className="rounded border border-border px-3 py-1 text-xs hover:border-neon-blue"
                 >
                   Ver
                 </button>
                 <button
-                  onClick={() => downloadOriginal(a.file_path)}
+                  onClick={() => downloadOriginal(a.id)}
                   disabled={!originalsAvailable}
                   className="inline-flex items-center gap-1 rounded border border-border px-3 py-1 text-xs hover:border-neon-green disabled:cursor-not-allowed disabled:opacity-40"
                   title={
