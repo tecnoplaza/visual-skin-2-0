@@ -167,16 +167,29 @@ function contentFor(eventType: string, order: string): EmailContent {
   }
 }
 
+export function notificationOrderHref(
+  eventType: string,
+  orderId: unknown,
+  siteOrigin: string,
+  customerAccessToken?: string,
+): string {
+  const encodedOrderId = encodeURIComponent(String(orderId ?? ""));
+  if (eventType.startsWith("admin_")) return `${siteOrigin}/admin/orders/${encodedOrderId}`;
+  if (!customerAccessToken) throw new Error("customer_access_token_required");
+  return `${siteOrigin}/pedido/${encodedOrderId}?token=${encodeURIComponent(customerAccessToken)}`;
+}
+
 export function renderNotificationEmail(
   eventType: string,
   payload: Payload,
   siteOrigin: string,
+  customerAccessToken?: string,
 ): NotificationMessage {
   const order = String(payload.order_number ?? "Pedido");
   const name = String(payload.customer_name ?? "cliente");
   const isAdmin = eventType.startsWith("admin_");
   const content = contentFor(eventType, order);
-  const href = `${siteOrigin}${isAdmin ? "/admin/orders/" : "/pedido/"}${encodeURIComponent(String(payload.order_id ?? ""))}`;
+  const href = notificationOrderHref(eventType, payload.order_id, siteOrigin, customerAccessToken);
   const subject = `${content.title}  ${order}`;
   const products = productsFrom(payload);
   const hasTotal = typeof payload.total_amount === "number" && Number.isFinite(payload.total_amount);

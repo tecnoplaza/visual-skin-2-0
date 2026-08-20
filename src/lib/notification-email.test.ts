@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import {
   containsSensitiveNotificationData,
   formatClp,
-  renderNotificationEmail,
+  renderNotificationEmail as renderEmail,
 } from "./notification-email.ts";
 
 const origin = "https://visualskin.cl";
@@ -22,6 +22,9 @@ const payload = {
     { pack_type: "carcasa+polera", quantity: 2 },
   ],
 };
+const emailToken = "em1.test-customer-email-access-token";
+const renderNotificationEmail = (event: string, data: Record<string, unknown>, site: string) =>
+  renderEmail(event, data, site, event.startsWith("admin_") ? undefined : emailToken);
 
 describe("notification email rendering", () => {
   it("contains no mojibake in source or rendered messages", () => {
@@ -117,12 +120,13 @@ describe("notification email rendering", () => {
     assert.doesNotMatch(message.html, /<script>/);
   });
 
-  it("plain text contains the CTA and credential-free URL", () => {
+  it("customer CTA contains secure access and Admin CTA remains token-free", () => {
     const customer = renderNotificationEmail("payment_rejected", payload, origin);
     const admin = renderNotificationEmail("admin_manual_review", payload, origin);
     assert.match(customer.text, /Revisar mi pedido: https:\/\/visualskin\.cl\/pedido\/00000000/);
     assert.match(admin.text, /Revisar pedido: https:\/\/visualskin\.cl\/admin\/orders\/00000000/);
-    assert.doesNotMatch(`${customer.text}${admin.text}`, /token=|authorization|service.role/i);
+    assert.match(customer.text, /\?token=em1\.test-customer-email-access-token/);
+    assert.doesNotMatch(admin.text, /token=|authorization|service.role/i);
   });
 
   it("includes sanitized reasons only for review emails", () => {

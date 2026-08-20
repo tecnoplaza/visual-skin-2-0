@@ -8,6 +8,7 @@ import {
   containsSensitiveNotificationData,
   renderNotificationEmail,
 } from "@/lib/notification-email";
+import { issueOrderEmailAccessToken } from "@/lib/order-email-access";
 
 type OutboxRow = {
   id: string;
@@ -68,7 +69,17 @@ async function processNotificationOutbox(cfg: ServerConfig): Promise<Response> {
       if (!to) throw new Error("recipient_not_configured");
       const payload = { ...row.payload, order_id: row.order_id };
       if (containsSensitiveNotificationData(payload)) throw new Error("sensitive_payload_rejected");
-      const message = renderNotificationEmail(row.event_type, payload, cfg.siteOrigin);
+      let customerAccessToken: string | undefined;
+      if (row.recipient_type === "customer") {
+        if (!row.order_id) throw new Error("customer_order_not_configured");
+        const { data: order } = await supabaseAdmin.from("custom_orders")
+          .select("public_access_token_hash").eq("id", row.order_id).maybeSingle();
+        if (!order?.public_access_token_hash) throw new Error("customer_order_access_not_configured");
+        customerAccessToken = issueOrderEmailAccessToken(row.order_id, order.public_access_token_hash);
+      }
+      const message = renderNotificationEmail(
+        row.event_type, payload, cfg.siteOrigin, customerAccessToken,
+      );
       await sendWithResend(cfg.emailProviderApiKey, cfg.emailFrom, to, message);
       await supabaseAdmin.rpc("complete_notification_outbox_v1" as any, { p_id: row.id } as any);
       sent++;

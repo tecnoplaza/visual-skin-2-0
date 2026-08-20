@@ -1488,7 +1488,12 @@ export const exchangeOrderToken = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!order?.public_access_token_hash) throw new Error("Token inválido");
     const provided = hashToken(data.token);
-    if (!constantTimeEq(order.public_access_token_hash, provided)) {
+    const { verifyOrderEmailAccessToken } = await import("@/lib/order-email-access");
+    const validPublicToken = constantTimeEq(order.public_access_token_hash, provided);
+    const validEmailToken = verifyOrderEmailAccessToken(
+      data.token, order.id, order.public_access_token_hash,
+    );
+    if (!validPublicToken && !validEmailToken) {
       throw new Error("Token inválido");
     }
 
