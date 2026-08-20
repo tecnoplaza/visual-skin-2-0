@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Loader2, Pencil, Plus, ShoppingBag, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { activeCartItems, activeCartQueryOptions, canContinueCart, cartItemPreviewSlots, cartPackLabel, designStatusLabel, CART_QUERY_KEY } from "@/lib/cart";
-import { getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
+import { clearActiveCart, getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { trackVisualSkinEvent } from "@/lib/analytics";
 
@@ -62,10 +62,28 @@ function CartPage() {
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "No se pudo eliminar el producto";
-      toast.error(message.includes("last_active_item_required")
-        ? "No puedes eliminar el único producto del pedido. Puedes editarlo o agregar otro producto."
-        : message);
+      toast.error(message);
     },
+  });
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      if (!cart?.order.id) throw new Error("Carrito no disponible");
+      await clearActiveCart({ data: { orderId: cart.order.id } });
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: CART_QUERY_KEY });
+      const previous = queryClient.getQueryData<any>(CART_QUERY_KEY);
+      if (previous) queryClient.setQueryData(CART_QUERY_KEY, { ...previous, items: [] });
+      return { previous };
+    },
+    onSuccess: async () => {
+      toast.success("Carrito vaciado");
+    },
+    onError: (error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(CART_QUERY_KEY, context.previous);
+      toast.error(error instanceof Error ? error.message : "No se pudo vaciar el carrito");
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY }),
   });
 
   if (cartQuery.isLoading) return <Centered><Loader2 className="h-7 w-7 animate-spin text-neon-blue" /></Centered>;
@@ -83,6 +101,7 @@ function CartPage() {
     <div className="mx-auto max-w-6xl px-4 py-8 sm:py-12">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div><p className="text-xs uppercase tracking-[.2em] text-neon-blue">Pedido {cart.order.order_number ?? "activo"}</p><h1 className="font-display text-3xl font-bold">Tu carrito</h1></div>
+        <button type="button" disabled={clearMutation.isPending} onClick={() => { if (window.confirm("¿Quieres eliminar todos los productos de tu carrito?")) clearMutation.mutate(); }} className="text-sm text-muted-foreground underline hover:text-destructive disabled:opacity-50">Vaciar carrito</button>
         <Link to="/crear-mi-pack" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold"><Plus className="h-4 w-4" /> Agregar otro producto</Link>
       </div>
       {noticeShown && (

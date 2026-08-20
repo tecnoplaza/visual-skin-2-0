@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Menu, X, ShoppingBag, Sparkles, Trash2 } from "lucide-react";
 import { useVisualContent } from "@/lib/cms";
 import { activeCartItems, activeCartQueryOptions, cartItemCount, cartItemPreviewSlots, cartPackLabel, canContinueCart, CART_QUERY_KEY } from "@/lib/cart";
-import { getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
+import { clearActiveCart, getOrderCsrfToken, removeOrderItem } from "@/lib/orders.functions";
 import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 
 const nav = [
@@ -47,6 +47,24 @@ export function Header() {
       return { previous };
     },
     onError: (_error, _orderItemId, context) => {
+      if (context?.previous) queryClient.setQueryData(CART_QUERY_KEY, context.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY }),
+  });
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      if (!cart?.order.id) throw new Error("Carrito no disponible");
+      const csrf = await getOrderCsrfToken({ data: { orderId: cart.order.id } });
+      setOrderCsrfToken(cart.order.id, csrf.csrfToken);
+      return clearActiveCart({ data: { orderId: cart.order.id } });
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: CART_QUERY_KEY });
+      const previous = queryClient.getQueryData<any>(CART_QUERY_KEY);
+      if (previous) queryClient.setQueryData(CART_QUERY_KEY, { ...previous, items: [] });
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
       if (context?.previous) queryClient.setQueryData(CART_QUERY_KEY, context.previous);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: CART_QUERY_KEY }),
@@ -179,7 +197,7 @@ export function Header() {
                 })}
               </div>}
             </div>
-            {items.length > 0 && <div className="border-t border-border p-5"><div className="mb-4 flex justify-between text-sm"><span>Subtotal</span><strong className="font-mono">${(cart?.order.subtotal_amount ?? 0).toLocaleString("es-CL")}</strong></div><div className="grid gap-2"><Link to="/carrito" onClick={() => setCartOpen(false)} className="rounded-xl border border-border px-4 py-3 text-center text-sm font-semibold">Ver carrito</Link><button type="button" disabled={!cart || !canContinueCart(cart)} onClick={() => { if (cart) void navigate({ to: "/pedido/$id", params: { id: cart.order.id }, search: {} }); setCartOpen(false); }} className="rounded-xl bg-neon-blue px-4 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40">Continuar</button></div></div>}
+            {items.length > 0 && <div className="border-t border-border p-5"><button type="button" disabled={clearMutation.isPending} onClick={() => { if (window.confirm("¿Quieres eliminar todos los productos de tu carrito?")) clearMutation.mutate(); }} className="mb-3 w-full text-left text-xs text-muted-foreground underline hover:text-destructive">Vaciar carrito</button><div className="mb-4 flex justify-between text-sm"><span>Subtotal</span><strong className="font-mono">${(cart?.order.subtotal_amount ?? 0).toLocaleString("es-CL")}</strong></div><div className="grid gap-2"><Link to="/carrito" onClick={() => setCartOpen(false)} className="rounded-xl border border-border px-4 py-3 text-center text-sm font-semibold">Ver carrito</Link><button type="button" disabled={!cart || !canContinueCart(cart)} onClick={() => { if (cart) void navigate({ to: "/pedido/$id", params: { id: cart.order.id }, search: {} }); setCartOpen(false); }} className="rounded-xl bg-neon-blue px-4 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40">Continuar</button></div></div>}
           </aside>
         </>
       )}

@@ -1736,9 +1736,34 @@ export const removeOrderItem = createServerFn({ method: "POST" })
     const session = await requireOrderSessionAndCsrf(data.orderId);
     await enforceCartMutationLimit(session.orderId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: activeItems, error: activeItemsError } = await supabaseAdmin
+      .from("order_items").select("id").eq("order_id", session.orderId).eq("is_active", true);
+    if (activeItemsError) throw new Error("No se pudo consultar el carrito");
+    if ((activeItems ?? []).length === 1 && activeItems?.[0]?.id === data.orderItemId) {
+      const { data: cleared, error: clearError } = await (supabaseAdmin as any).rpc("clear_active_cart_v1", {
+        p_order_id: session.orderId,
+      });
+      if (clearError) throw new Error(clearError.message);
+      return cleared as any;
+    }
     const { data: result, error } = await (supabaseAdmin as any).rpc("remove_order_item_v1", {
       p_order_id: session.orderId,
       p_order_item_id: data.orderItemId,
+    });
+    if (error) throw new Error(error.message);
+    return result as any;
+  });
+
+export const clearActiveCart = createServerFn({ method: "POST" })
+  .inputValidator((input) => OrderIdInput.parse(input))
+  .handler(async ({ data }) => {
+    applyNoStoreHeaders();
+    assertSameOrigin();
+    const session = await requireOrderSessionAndCsrf(data.orderId);
+    await enforceCartMutationLimit(session.orderId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: result, error } = await (supabaseAdmin as any).rpc("clear_active_cart_v1", {
+      p_order_id: session.orderId,
     });
     if (error) throw new Error(error.message);
     return result as any;
