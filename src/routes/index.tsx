@@ -205,9 +205,9 @@ function HeroProductCard({ pack }: { pack: PromoPack }) {
   return (
     <Link
       to={pathname}
-      className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/90 text-left shadow-lg shadow-black/10 transition duration-200 hover:-translate-y-1 hover:border-neon-blue/60 hover:shadow-neon-blue/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transform-none motion-reduce:transition-none"
+      className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black text-left shadow-lg shadow-black/20 transition duration-200 hover:-translate-y-1 hover:border-white/25 hover:shadow-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transform-none motion-reduce:transition-none"
     >
-      <div className={`relative aspect-[4/5] overflow-hidden bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"}`}>
+      <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {image && <img src={image} alt={pack.name} decoding="async" className="absolute inset-0 h-full w-full object-contain" />}
       </div>
       <div className="flex flex-1 flex-col gap-3 border-t border-border/70 p-5">

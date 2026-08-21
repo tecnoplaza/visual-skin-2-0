@@ -68,6 +68,8 @@ test("card Home usa datos reales, imagen completa, tag opcional, precio canónic
   assert.match(home, /publicProductImage\(pack\.image_url\)/);
   assert.match(home, /alt=\{pack\.name\}/);
   assert.match(home, /object-contain/);
+  assert.match(home, /aspect-\[4\/5\][^"`]*bg-black/);
+  assert.doesNotMatch(home, /aspect-\[4\/5\][^\n]*pack\.gradient/);
   assert.match(home, /const tag = pack\.tag\?\.trim\(\)/);
   assert.match(home, /\{tag && <span[^>]*>\{tag\}<\/span>\}/);
   assert.doesNotMatch(home, /tag \|\| ["']Pack["']|Pack personalizable/i);
