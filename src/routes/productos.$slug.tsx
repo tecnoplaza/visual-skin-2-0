@@ -65,9 +65,9 @@ function ProductPage() {
         </nav>
 
         <article className="grid gap-10 lg:grid-cols-2 lg:items-start">
-          <div className={`relative aspect-square overflow-hidden rounded-3xl border border-border bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"}`}>
+          <div className="aspect-[4/5] rounded-3xl border border-border bg-black">
             {image ? (
-              <img src={image} alt={pack.name} className="absolute inset-0 h-full w-full object-cover" fetchPriority="high" />
+              <img src={image} alt={pack.name} className="h-full w-full rounded-3xl object-contain object-center" fetchPriority="high" />
             ) : (
               <div className="h-full w-full" />
             )}

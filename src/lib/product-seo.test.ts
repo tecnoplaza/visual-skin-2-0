@@ -168,7 +168,9 @@ test("ruta SSR conserva 404 real, breadcrumbs, JSON-LD y CTA al personalizador",
   assert.match(customizer, /type Search = \{ pack\?: PackId; id\?: string/);
   assert.match(route, /pricing &&/);
   assert.match(route, /<img src=\{image\} alt=\{pack\.name\}/);
-  assert.match(route, /absolute inset-0 h-full w-full object-cover/);
+  assert.match(route, /h-full w-full rounded-3xl object-contain object-center/);
+  assert.match(route, /aspect-\[4\/5\][^"`]*bg-black/);
+  assert.doesNotMatch(route, /object-cover|bg-gradient-to-br \$\{pack\.gradient/);
   assert.match(route, /const tag = pack\.tag\?\.trim\(\)/);
   assert.match(route, /\{tag && <p[^>]*>\{tag\}<\/p>\}/);
   assert.doesNotMatch(route, /Pack personalizable/i);
