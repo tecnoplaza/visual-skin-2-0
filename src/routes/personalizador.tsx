@@ -16,6 +16,7 @@ import { setOrderCsrfToken } from "@/lib/order-csrf-store";
 import { activeCartQueryOptions, cartWriteMode, CART_QUERY_KEY } from "@/lib/cart";
 import GarmentDesignCanvas, { type GarmentCanvasRow } from "@/components/personalizador/GarmentDesignCanvas";
 import { isValidGarmentPrintArea, type GarmentPrintArea } from "@/lib/garment-model";
+import { groupPhoneBrands, phoneBrandGroupForId, type PhoneBrandGroup } from "@/lib/phone-brand-groups";
 import { toast } from "sonner";
 
 const CaseCanvasKonva = lazy(() => import("@/components/personalizador/CaseCanvasKonva"));
@@ -153,12 +154,13 @@ function Personalizador() {
   }, []);
 
   useEffect(() => {
-    if (!brandId) { setModels([]); return; }
+    const group = phoneBrandGroupForId(groupPhoneBrands(brands), brandId);
+    if (!group) { setModels([]); return; }
     supabase.from("phone_models")
       .select("id,brand_id,name,slug,mockup_url,preview_url,overlay_url,holes_url,mold_status,print_area")
-      .eq("brand_id", brandId).eq("is_active", true).eq("mold_status", "listo").order("sort_order")
+      .in("brand_id", group.brandIds).eq("is_active", true).eq("mold_status", "listo").order("sort_order")
       .then(({ data }) => setModels((data ?? []) as ModelRow[]));
-  }, [brandId]);
+  }, [brandId, brands]);
 
   const garmentType: "polera" | "poleron" | null = hasShirt
     ? (pack === "carcasa+poleron" ? "poleron" : "polera")
@@ -225,6 +227,7 @@ function Personalizador() {
 
   const brand = brands.find((b) => b.id === brandId);
   const model = models.find((m) => m.id === modelId);
+  const brandGroups = useMemo(() => groupPhoneBrands(brands), [brands]);
   useEffect(() => {
     if (model) trackVisualSkinEvent({ event_name: "view_item", pack_type: pack, phone_brand: brand?.name, phone_model: model.name, value: price, currency: "CLP" });
   }, [model?.id]);
@@ -346,10 +349,10 @@ function Personalizador() {
         <div className="rounded-2xl border border-border bg-card p-6">
           {step === 1 && (
             <StepModel
-              brands={brands} models={models}
+              brandGroups={brandGroups} models={models}
               brandId={brandId} modelId={modelId}
               onBrand={(id) => { setBrandId(id); setModelId(""); }}
-              onModel={setModelId}
+              onModel={(selectedModel) => { setBrandId(selectedModel.brand_id); setModelId(selectedModel.id); }}
             />
           )}
           {step === 2 && (
@@ -798,12 +801,13 @@ function Row({ k, v }: { k: string; v: string }) {
 }
 
 function StepModel({
-  brands, models, brandId, modelId, onBrand, onModel,
+  brandGroups, models, brandId, modelId, onBrand, onModel,
 }: {
-  brands: BrandRow[]; models: ModelRow[];
+  brandGroups: PhoneBrandGroup[]; models: ModelRow[];
   brandId: string; modelId: string;
-  onBrand: (id: string) => void; onModel: (id: string) => void;
+  onBrand: (id: string) => void; onModel: (model: ModelRow) => void;
 }) {
+  const selectedBrandGroup = phoneBrandGroupForId(brandGroups, brandId);
   return (
     <div>
       <h2 className="flex items-center gap-2 font-display text-xl font-semibold"><Smartphone className="h-5 w-5 text-neon-blue" /> Elige tu celular</h2>
@@ -812,27 +816,27 @@ function StepModel({
       <div className="mt-6 grid min-w-0 gap-6 md:grid-cols-2">
         <section className="min-w-0" aria-labelledby="phone-brand-heading">
           <h3 id="phone-brand-heading" className="text-xs uppercase tracking-wider text-muted-foreground">Marca</h3>
-          {brands.length === 0 ? (
+          {brandGroups.length === 0 ? (
             <div className="mt-2 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
               <Loader2 className="mx-auto h-5 w-5 animate-spin" />
               <p className="mt-2">Cargando marcas…</p>
             </div>
           ) : (
             <div role="listbox" aria-label="Marca" className="mt-2 max-h-[280px] space-y-1 overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-background/40 p-1.5">
-              {brands.map((b) => {
-                const selected = brandId === b.id;
+              {brandGroups.map((group) => {
+                const selected = selectedBrandGroup?.key === group.key;
                 return (
                   <button
-                    key={b.id}
+                    key={group.key}
                     type="button"
                     role="option"
                     aria-selected={selected}
-                    onClick={() => onBrand(b.id)}
+                    onClick={() => onBrand(group.brandIds[0])}
                     className={`flex min-h-10 w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue ${
                       selected ? "border-neon-blue bg-neon-blue/10 text-neon-blue" : "border-transparent hover:border-neon-blue/40 hover:bg-card"
                     }`}
                   >
-                    <span className="min-w-0 truncate">{b.name}</span>
+                    <span className="min-w-0 truncate">{group.name}</span>
                     {selected && <Check aria-hidden="true" className="h-4 w-4 shrink-0" />}
                   </button>
                 );
@@ -858,7 +862,7 @@ function StepModel({
                     type="button"
                     role="option"
                     aria-selected={selected}
-                    onClick={() => onModel(m.id)}
+                    onClick={() => onModel(m)}
                     className={`flex min-h-10 w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-green ${
                       selected ? "border-neon-green bg-neon-green/10 text-neon-green" : "border-transparent hover:border-neon-green/40 hover:bg-card"
                     }`}

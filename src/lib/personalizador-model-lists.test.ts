@@ -8,12 +8,14 @@ const stepModel = customizer.slice(customizer.indexOf("function StepModel("), cu
 test("selector de celular conserva datos, orden y callbacks existentes", () => {
   assert.match(customizer, /\.from\("brands"\)[\s\S]*?\.order\("sort_order"\)/);
   assert.match(customizer, /\.from\("phone_models"\)[\s\S]*?\.order\("sort_order"\)/);
-  assert.match(customizer, /brands\.map\(\(b\)/);
+  assert.match(customizer, /\.in\("brand_id", group\.brandIds\)/);
+  assert.doesNotMatch(customizer, /\.eq\("brand_id", brandId\)/);
+  assert.match(customizer, /brandGroups\.map\(\(group\)/);
   assert.match(customizer, /models\.map\(\(m\)/);
-  assert.match(customizer, /onClick=\{\(\) => onBrand\(b\.id\)\}/);
-  assert.match(customizer, /onClick=\{\(\) => onModel\(m\.id\)\}/);
+  assert.match(customizer, /onClick=\{\(\) => onBrand\(group\.brandIds\[0\]\)\}/);
+  assert.match(customizer, /onClick=\{\(\) => onModel\(m\)\}/);
   assert.match(customizer, /onBrand=\{\(id\) => \{ setBrandId\(id\); setModelId\(""\); \}\}/);
-  assert.match(customizer, /onModel=\{setModelId\}/);
+  assert.match(customizer, /setBrandId\(selectedModel\.brand_id\); setModelId\(selectedModel\.id\)/);
 });
 
 test("marcas y modelos son listas compactas, accesibles y con scroll vertical", () => {
