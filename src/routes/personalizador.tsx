@@ -809,58 +809,72 @@ function StepModel({
       <h2 className="flex items-center gap-2 font-display text-xl font-semibold"><Smartphone className="h-5 w-5 text-neon-blue" /> Elige tu celular</h2>
       <p className="mt-1 text-sm text-muted-foreground">Cargamos automáticamente el molde del modelo.</p>
 
-      <div className="mt-6">
-        <label className="text-xs uppercase tracking-wider text-muted-foreground">Marca</label>
-        {brands.length === 0 ? (
-          <div className="mt-2 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            <Loader2 className="mx-auto h-5 w-5 animate-spin" />
-            <p className="mt-2">Cargando marcas…</p>
-          </div>
-        ) : (
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {brands.map((b) => (
-              <button
-                key={b.id}
-                onClick={() => onBrand(b.id)}
-                className={`rounded-lg border p-3 text-sm transition-colors ${
-                  brandId === b.id ? "border-neon-blue bg-neon-blue/10 text-neon-blue" : "border-border hover:border-neon-blue/50"
-                }`}
-              >
-                {b.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {brandId && (
-        <div className="mt-6">
-          <label className="text-xs uppercase tracking-wider text-muted-foreground">Modelo</label>
-          {models.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">Sin modelos activos para esta marca.</p>
+      <div className="mt-6 grid min-w-0 gap-6 md:grid-cols-2">
+        <section className="min-w-0" aria-labelledby="phone-brand-heading">
+          <h3 id="phone-brand-heading" className="text-xs uppercase tracking-wider text-muted-foreground">Marca</h3>
+          {brands.length === 0 ? (
+            <div className="mt-2 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+              <p className="mt-2">Cargando marcas…</p>
+            </div>
           ) : (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {models.map((m) => {
-                const ready = modelReady(m);
+            <div role="listbox" aria-label="Marca" className="mt-2 max-h-[280px] space-y-1 overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-background/40 p-1.5">
+              {brands.map((b) => {
+                const selected = brandId === b.id;
                 return (
                   <button
-                    key={m.id}
-                    onClick={() => onModel(m.id)}
-                    className={`rounded-lg border p-3 text-left text-sm transition-colors ${
-                      modelId === m.id ? "border-neon-green bg-neon-green/10 text-neon-green" : "border-border hover:border-neon-green/50"
+                    key={b.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => onBrand(b.id)}
+                    className={`flex min-h-10 w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue ${
+                      selected ? "border-neon-blue bg-neon-blue/10 text-neon-blue" : "border-transparent hover:border-neon-blue/40 hover:bg-card"
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span>{m.name}</span>
-                      {!ready && <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-[10px] text-yellow-400">sin mockup web</span>}
-                    </div>
+                    <span className="min-w-0 truncate">{b.name}</span>
+                    {selected && <Check aria-hidden="true" className="h-4 w-4 shrink-0" />}
                   </button>
                 );
               })}
             </div>
           )}
-        </div>
-      )}
+        </section>
+
+        <section className="min-w-0" aria-labelledby="phone-model-heading">
+          <h3 id="phone-model-heading" className="text-xs uppercase tracking-wider text-muted-foreground">Modelo</h3>
+          {!brandId ? (
+            <p className="mt-2 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Selecciona una marca para ver sus modelos.</p>
+          ) : models.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">Sin modelos activos para esta marca.</p>
+          ) : (
+            <div role="listbox" aria-label="Modelo" className="mt-2 max-h-[280px] space-y-1 overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-background/40 p-1.5">
+              {models.map((m) => {
+                const ready = modelReady(m);
+                const selected = modelId === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => onModel(m.id)}
+                    className={`flex min-h-10 w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-green ${
+                      selected ? "border-neon-green bg-neon-green/10 text-neon-green" : "border-transparent hover:border-neon-green/40 hover:bg-card"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate">{m.name}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {!ready && <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-[10px] text-yellow-400">sin mockup web</span>}
+                      {selected && <Check aria-hidden="true" className="h-4 w-4" />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
