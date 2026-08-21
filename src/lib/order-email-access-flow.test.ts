@@ -26,7 +26,7 @@ describe("order email access integration contract", () => {
   });
 
   it("analytics providers and page view wait until token query is removed", () => {
-    assert.match(analytics, /query\.has\("token"\)\)return/);
+    assert.match(analytics, /hasPendingSensitiveToken\(location\.searchStr\)\)return/);
     assert.match(analytics, /location\.pathname,location\.searchStr/);
   });
 });

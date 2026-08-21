@@ -5,6 +5,9 @@ export type AnalyticsEventName =
 
 export type AnalyticsConsent = { necessary: true; analytics: boolean; marketing: boolean };
 export type Provider = "meta" | "ga4" | "google_ads" | "tiktok";
+export function consentAllowsProvider(provider: Provider, consent: AnalyticsConsent): boolean {
+  return provider === "ga4" ? consent.analytics : consent.marketing;
+}
 export type AnalyticsSetting = {
   provider: Provider; enabled: boolean; public_id: string | null;
   conversion_id: string | null; conversion_label: string | null;

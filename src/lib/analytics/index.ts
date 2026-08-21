@@ -1,6 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { captureAttribution, getAnalyticsIdentity, getConsent } from "./identity";
-import type { AnalyticsSetting, VisualSkinEvent } from "./types";
+import { consentAllowsProvider, type AnalyticsSetting, type VisualSkinEvent } from "./types";
 import { loadMeta, sendMeta } from "./providers/meta";
 import { configureGoogleAds, loadGoogle, sendGoogle } from "./providers/google";
 import { loadTikTok, sendTikTok } from "./providers/tiktok";
@@ -10,12 +10,12 @@ import { recordAnalyticsEvent } from "./analytics.functions";
 let settings: AnalyticsSetting[]=[];
 let initialization:Promise<void>|null=null;
 export async function initializeAnalyticsProviders(){
-  initialization=(async()=>{const {data}=await (supabase as any).from("analytics_settings").select("provider,enabled,public_id,conversion_id,conversion_label"); settings=(data??[]) as AnalyticsSetting[];
+  if(initialization)return initialization;initialization=(async()=>{const {data}=await (supabase as any).from("analytics_settings").select("provider,enabled,public_id,conversion_id,conversion_label"); settings=(data??[]) as AnalyticsSetting[];
     const consent=getConsent();if(!consent)return;const ga=settings.find(s=>s.provider==="ga4");const ads=settings.find(s=>s.provider==="google_ads");
-    if(consent.analytics&&ga)loadGoogle(ga);if(consent.marketing){const meta=settings.find(s=>s.provider==="meta");const tt=settings.find(s=>s.provider==="tiktok");if(meta)loadMeta(meta);if(tt)loadTikTok(tt);if(ads)configureGoogleAds(ads);}})();
-  await initialization;
+    if(ga&&consentAllowsProvider("ga4",consent))loadGoogle(ga);if(consent.marketing){const meta=settings.find(s=>s.provider==="meta");const tt=settings.find(s=>s.provider==="tiktok");if(meta)loadMeta(meta);if(tt)loadTikTok(tt);if(ads)configureGoogleAds(ads);}})();
+  try{await initialization;}finally{initialization=null;}
 }
-function dispatchProviders(e:VisualSkinEvent){const c=getConsent();if(!c)return;const ga=settings.find(s=>s.provider==="ga4");const ads=settings.find(s=>s.provider==="google_ads");if(c.analytics&&ga?.enabled)sendGoogle(e,c.marketing?ads:undefined);if(c.marketing){if(settings.find(s=>s.provider==="meta")?.enabled)sendMeta(e);if(settings.find(s=>s.provider==="tiktok")?.enabled)sendTikTok(e);}}
+function dispatchProviders(e:VisualSkinEvent){const c=getConsent();if(!c)return;const ga=settings.find(s=>s.provider==="ga4");const ads=settings.find(s=>s.provider==="google_ads");if(ga?.enabled&&consentAllowsProvider("ga4",c))sendGoogle(e,c.marketing?ads:undefined);if(c.marketing){if(settings.find(s=>s.provider==="meta")?.enabled)sendMeta(e);if(settings.find(s=>s.provider==="tiktok")?.enabled)sendTikTok(e);}}
 export function trackVisualSkinEvent(event:VisualSkinEvent):void{
   if(typeof window==="undefined")return; queueMicrotask(async()=>{try{const consent=getConsent();if(!consent)return;
     if(event.event_name==="purchase"){if(!consent.analytics)return;const identity=getAnalyticsIdentity();const result=await claimApprovedPurchase({data:{orderId:event.order_id!,sessionId:identity.sessionId,anonymousId:identity.anonymousId}});if(result?.ok&&!result.deduplicated){await (initialization??initializeAnalyticsProviders());dispatchProviders({...event,value:result.value,currency:result.currency,items:result.items,order_id:result.order_id});}return;}

@@ -56,6 +56,7 @@ const ANALYTICS_HOSTS = [
   "https://www.facebook.com",
   "https://www.googletagmanager.com",
   "https://www.google-analytics.com",
+  "https://*.google-analytics.com",
   "https://analytics.google.com",
   "https://googleads.g.doubleclick.net",
   "https://analytics.tiktok.com",
