@@ -1,4 +1,7 @@
 User-agent: *
 Allow: /
-Disallow: /admin
+Disallow: /api/
+Disallow: /admin/
 Disallow: /pedido/
+
+Sitemap: https://www.visualskin.cl/sitemap.xml

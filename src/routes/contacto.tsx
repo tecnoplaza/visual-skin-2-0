@@ -8,22 +8,24 @@ import {
   whatsappUrl,
   instagramUrl,
   facebookUrl,
+  contactContentQueryOptions,
+  DEFAULT_CONTACT,
 } from "@/lib/cms";
+import { buildSeoHead } from "@/lib/seo";
+
+const TITLE = "Contacto — VISUALSKIN";
+const DESCRIPTION = "Escríbenos por WhatsApp o correo. Respondemos en menos de 24h.";
 
 export const Route = createFileRoute("/contacto")({
   component: Contacto,
-  head: () => ({
-    meta: [
-      { title: "Contacto — VISUALSKIN" },
-      { name: "description", content: "Escríbenos por WhatsApp o correo. Respondemos en menos de 24h." },
-      { property: "og:title", content: "Contacto — VISUALSKIN" },
-      { property: "og:description", content: "Escríbenos por WhatsApp o correo. Respondemos en menos de 24h." },
-    ],
-  }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(contactContentQueryOptions()).catch(() => DEFAULT_CONTACT),
+  head: () => buildSeoHead({ pathname: "/contacto", title: TITLE, description: DESCRIPTION }),
 });
 
 function Contacto() {
-  const { data: contact } = useContactContent();
+  const initialContact = Route.useLoaderData();
+  const { data: queriedContact } = useContactContent();
+  const contact = queriedContact ?? initialContact;
   const [status, setStatus] = useState<null | "opened" | "no-channel" | "invalid">(null);
   const [form, setForm] = useState({ name: "", email: "", subject: "", message: "" });
 

@@ -2,8 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import type {} from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
+import { renderSitemap } from "@/lib/seo";
 
-const BASE_PATHS = [
+export const BASE_PATHS = [
   { path: "/", changefreq: "weekly", priority: "1.0" },
   { path: "/catalogo", changefreq: "weekly", priority: "0.9" },
   { path: "/crear-mi-pack", changefreq: "weekly", priority: "0.9" },
@@ -18,17 +19,10 @@ const LEGAL_PATHS: Record<string, { path: string; changefreq: string; priority: 
   legal_returns: { path: "/cambios-y-devoluciones", changefreq: "monthly", priority: "0.4" },
 };
 
-function escapeXml(v: string) {
-  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-
 export const Route = createFileRoute("/sitemap.xml")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
-        const url = new URL(request.url);
-        const origin = `${url.protocol}//${url.host}`;
-
+      GET: async () => {
         const paths = [...BASE_PATHS];
         try {
           const supabaseUrl = process.env.SUPABASE_URL;
@@ -51,16 +45,7 @@ export const Route = createFileRoute("/sitemap.xml")({
           // ignore, base sitemap still returned
         }
 
-        const urls = paths.map(
-          (e) =>
-            `  <url>\n    <loc>${escapeXml(origin + e.path)}</loc>\n    <changefreq>${e.changefreq}</changefreq>\n    <priority>${e.priority}</priority>\n  </url>`
-        );
-        const xml = [
-          `<?xml version="1.0" encoding="UTF-8"?>`,
-          `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
-          ...urls,
-          `</urlset>`,
-        ].join("\n");
+        const xml = renderSitemap(paths);
         return new Response(xml, {
           headers: {
             "Content-Type": "application/xml; charset=utf-8",

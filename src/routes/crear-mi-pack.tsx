@@ -1,15 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Shirt, Package, Smartphone, Loader2 } from "lucide-react";
-import { usePromoPacks, type PromoPack } from "@/lib/cms";
+import { promoPacksQueryOptions, usePromoPacks, type PromoPack } from "@/lib/cms";
+import { buildSeoHead } from "@/lib/seo";
+
+const TITLE = "Crear mi pack — VISUALSKIN";
+const DESCRIPTION = "Elige tu combo: solo carcasa, carcasa + polera o carcasa + polerón. 100% personalizado.";
 
 export const Route = createFileRoute("/crear-mi-pack")({
   component: CrearPack,
-  head: () => ({
-    meta: [
-      { title: "Crear mi pack — VISUALSKIN" },
-      { name: "description", content: "Elige tu combo: solo carcasa, carcasa + polera o carcasa + polerón. 100% personalizado." },
-    ],
-  }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(promoPacksQueryOptions(true)).catch(() => []),
+  head: () => buildSeoHead({ pathname: "/crear-mi-pack", title: TITLE, description: DESCRIPTION }),
 });
 
 const ICONS = {
@@ -27,7 +27,10 @@ const ACCENTS = {
 } as const;
 
 function CrearPack() {
-  const { data: packs = [], isLoading } = usePromoPacks(true);
+  const initialPacks = Route.useLoaderData();
+  const { data: queriedPacks, isLoading: queryLoading } = usePromoPacks(true);
+  const packs = queriedPacks ?? initialPacks;
+  const isLoading = queryLoading && initialPacks.length === 0;
 
   return (
     <section className="mx-auto max-w-6xl px-4 py-16">
@@ -60,7 +63,7 @@ function PackCard({ pack }: { pack: PromoPack }) {
       <div className={`absolute inset-0 bg-gradient-to-br ${grad} opacity-40 pointer-events-none`} />
       <div className="relative">
         {pack.image_url ? (
-          <img src={pack.image_url} alt="" className="mb-4 h-32 w-full rounded-2xl object-cover" />
+          <img src={pack.image_url} alt={pack.name} loading="lazy" decoding="async" className="mb-4 h-32 w-full rounded-2xl object-cover" />
         ) : (
           <div className={`inline-grid h-14 w-14 place-items-center rounded-2xl bg-secondary ${text}`}>
             <Icon className="h-7 w-7" />

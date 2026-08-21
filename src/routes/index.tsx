@@ -1,21 +1,30 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight, Zap, Palette, Truck, ShieldCheck, Star, Smartphone, Shirt } from "lucide-react";
 import { packs as fallbackPacks } from "../lib/mock-data";
-import { useHomeContent, usePromoPacks } from "@/lib/cms";
+import { DEFAULT_HOME, homeContentQueryOptions, promoPacksQueryOptions, useHomeContent, usePromoPacks } from "@/lib/cms";
+import { buildSeoHead, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
+
+const HOME_TITLE = "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón";
+const HOME_DESCRIPTION = "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa.";
 
 export const Route = createFileRoute("/")({
   component: Home,
-  head: () => ({
-    meta: [
-      { title: "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón" },
-      { name: "description", content: "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa." },
-    ],
-  }),
+  loader: async ({ context }) => {
+    const [home, packs] = await Promise.all([
+      context.queryClient.ensureQueryData(homeContentQueryOptions()).catch(() => DEFAULT_HOME),
+      context.queryClient.ensureQueryData(promoPacksQueryOptions(true)).catch(() => []),
+    ]);
+    return { home, packs };
+  },
+  head: () => buildSeoHead({ pathname: "/", title: HOME_TITLE, description: HOME_DESCRIPTION }),
 });
 
 function Home() {
-  const { data: home } = useHomeContent();
-  const { data: cmsPacks } = usePromoPacks(true);
+  const initial = Route.useLoaderData();
+  const { data: queriedHome } = useHomeContent();
+  const { data: queriedPacks } = usePromoPacks(true);
+  const home = queriedHome ?? initial.home;
+  const cmsPacks = queriedPacks ?? initial.packs;
   const packs = (cmsPacks && cmsPacks.length > 0) ? cmsPacks.map((p) => ({
     id: p.id, name: p.name, tag: p.tag, gradient: p.gradient || "from-blue-500 to-cyan-400",
     price: Number(p.sale_price ?? p.price), image_url: p.image_url, description: p.description,
@@ -26,10 +35,14 @@ function Home() {
 
 
   const sections = home?.sections ?? { hero: true, how_it_works: true, featured_packs: true, why_us: true, cta: true };
-  const titleParts = (home?.hero_title ?? "").split("\n");
+  const titleParts = (home?.hero_title?.trim() || DEFAULT_HOME.hero_title).split("\n");
 
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(websiteJsonLd()) }}
+      />
       {sections.hero && (
         <section className="relative overflow-hidden">
           <div className="absolute inset-0 grid-bg opacity-40" />
@@ -64,13 +77,13 @@ function Home() {
 
             {home?.hero_image_url ? (
               <div className="mx-auto mt-16 max-w-3xl">
-                <img src={home.hero_image_url} alt="" className="mx-auto rounded-2xl border border-border" />
+                <img src={home.hero_image_url} alt={home.hero_title?.trim() || DEFAULT_HOME.hero_title.replace("\n", " ")} decoding="async" fetchPriority="high" className="mx-auto rounded-2xl border border-border" />
               </div>
             ) : (
               <div className="mx-auto mt-16 grid max-w-4xl grid-cols-2 gap-4 md:grid-cols-3">
                 {packs.slice(0, 3).map((p, i) => (
                   <div key={p.id} className={`group relative aspect-[3/4] overflow-hidden rounded-2xl border border-border bg-gradient-to-br ${p.gradient} p-4 transition-transform hover:-translate-y-1 ${i === 1 ? "md:translate-y-6" : ""}`}>
-                    {p.image_url && <img src={p.image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+                    {p.image_url && <img src={p.image_url} alt={p.name} decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
                     <div className="absolute inset-0 bg-black/20" />
                     <div className="relative flex h-full flex-col justify-between text-white">
                       <span className="w-fit rounded-full bg-white/20 px-2 py-1 text-[10px] backdrop-blur">{p.tag || "Pack"}</span>
@@ -126,7 +139,7 @@ function Home() {
               {packs.slice(0, 6).map((p) => (
                 <a key={p.id} href={p.button_url} className="group overflow-hidden rounded-2xl border border-border bg-card transition-all hover:border-neon-green/50">
                   <div className={`relative aspect-square bg-gradient-to-br ${p.gradient}`}>
-                    {p.image_url && <img src={p.image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+                    {p.image_url && <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
                     <div className="absolute inset-0 bg-black/10 transition-opacity group-hover:opacity-0" />
                     {p.tag && (
                       <span className="absolute left-3 top-3 rounded-full bg-background/80 px-2 py-1 text-[10px] font-semibold backdrop-blur">{p.tag}</span>

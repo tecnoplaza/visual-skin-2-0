@@ -7,7 +7,8 @@ import type Konva from "konva";
 import { PACK_PRICES } from "../lib/mock-data";
 import { supabase } from "@/integrations/supabase/client";
 import { removeImageBackground } from "@/lib/remove-bg";
-import { usePromoPack, usePromoPacks } from "@/lib/cms";
+import { promoPacksQueryOptions, usePromoPack, usePromoPacks } from "@/lib/cms";
+import { buildSeoHead } from "@/lib/seo";
 import { dataUrlToBlob, renderGarmentPNG, uploadOrderItemDesign } from "@/lib/order-export";
 import { addOrderItem, createSecureOrder, finalizeOrderItemDesigns, getOrderCsrfToken } from "@/lib/orders.functions";
 import { trackVisualSkinEvent } from "@/lib/analytics";
@@ -57,17 +58,18 @@ export const Route = createFileRoute("/personalizador")({
     pack: s.pack === "carcasa+polera+poleron" ? "carcasa+polera+poleron"
         : s.pack === "carcasa+poleron" ? "carcasa+poleron"
         : s.pack === "carcasa" ? "carcasa"
-        : "carcasa+polera",
+        : s.pack === "carcasa+polera" ? "carcasa+polera"
+        : undefined,
     id: typeof s.id === "string" ? s.id : undefined,
     editItem: typeof s.editItem === "string" ? s.editItem : undefined,
   }),
 
   component: Personalizador,
-  head: () => ({
-    meta: [
-      { title: "Personalizador — VISUALSKIN" },
-      { name: "description", content: "Diseña tu carcasa y tu polera o polerón. Elige tu modelo, sube tu imagen y ajústala dentro del molde." },
-    ],
+  loader: ({ context }) => context.queryClient.ensureQueryData(promoPacksQueryOptions(true)).catch(() => []),
+  head: () => buildSeoHead({
+    pathname: "/personalizador",
+    title: "Personalizador — VISUALSKIN",
+    description: "Diseña tu carcasa y tu polera o polerón. Elige tu modelo, sube tu imagen y ajústala dentro del molde.",
   }),
 });
 
@@ -96,12 +98,14 @@ const modelImage = (m?: ModelRow | null) => m?.overlay_url || m?.mockup_url || m
 const modelReady = (m?: ModelRow | null) => !!m && m.mold_status === "listo" && !!modelImage(m);
 
 function Personalizador() {
+  const initialPacks = Route.useLoaderData();
   const { pack: initialPack, id: promoId, editItem } = Route.useSearch();
   const { data: promoPack } = usePromoPack(promoId);
   // Only used to decide whether the "Carcasa + Polera + Polerón" pill is shown
   // in the initial selector. The pill is rendered only when an active promo
   // pack row for pack_type='carcasa+polera+poleron' exists in the CMS.
-  const { data: activePacks } = usePromoPacks(true);
+  const { data: queriedActivePacks } = usePromoPacks(true);
+  const activePacks = queriedActivePacks ?? initialPacks;
   const completePromoPack =
     (activePacks ?? []).find(
       (p) => p.pack_type === "carcasa+polera+poleron" && p.is_active,

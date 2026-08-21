@@ -3,6 +3,26 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { applyOrderSecurityHeaders, isOrderPath } from "./lib/security-headers";
+import { genericOrderNotFoundHtml, shouldReturnGenericOrder404 } from "./lib/order-page-http";
+import { PRIVATE_ROBOTS_DIRECTIVE } from "./lib/seo";
+
+function isAdminPath(pathname: string): boolean {
+  return pathname === "/admin" || pathname.startsWith("/admin/");
+}
+
+function isApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+function applyRobotsHeader(response: Response, value: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("X-Robots-Tag", value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 
 type ServerEntry = {
@@ -50,11 +70,24 @@ export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     const url = new URL(request.url);
     const orderScoped = isOrderPath(url.pathname);
+    const adminScoped = isAdminPath(url.pathname);
+    const apiScoped = isApiPath(url.pathname);
+    const cartScoped = url.pathname === "/carrito";
+    if (orderScoped && shouldReturnGenericOrder404(url, request.headers.get("cookie"))) {
+      return applyOrderSecurityHeaders(
+        new Response(genericOrderNotFoundHtml(), {
+          status: 404,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      );
+    }
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       const normalized = await normalizeCatastrophicSsrResponse(response);
       if (orderScoped) return applyOrderSecurityHeaders(normalized);
+      if (adminScoped || cartScoped) return applyRobotsHeader(normalized, PRIVATE_ROBOTS_DIRECTIVE);
+      if (apiScoped) return applyRobotsHeader(normalized, "noindex");
       return normalized;
     } catch (error) {
       console.error(error);
@@ -62,7 +95,10 @@ export default {
         status: 500,
         headers: { "content-type": "text/html; charset=utf-8" },
       });
-      return orderScoped ? applyOrderSecurityHeaders(errResp) : errResp;
+      if (orderScoped) return applyOrderSecurityHeaders(errResp);
+      if (adminScoped || cartScoped) return applyRobotsHeader(errResp, PRIVATE_ROBOTS_DIRECTIVE);
+      if (apiScoped) return applyRobotsHeader(errResp, "noindex");
+      return errResp;
     }
   },
 };

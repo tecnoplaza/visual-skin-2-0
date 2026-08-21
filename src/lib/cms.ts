@@ -1,6 +1,6 @@
 // CMS helpers: defaults + fetchers. Frontend reads from Supabase and falls back
 // to these defaults when nothing is loaded. Managed from /admin → "Contenido web".
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
 // ---------- Types ----------
@@ -537,48 +537,60 @@ export const cmsKeys = {
   legalReturns: ["cms", "legal_returns"] as const,
 };
 
-export function useLegalIdentity() {
-  return useQuery({
+export const legalIdentityQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.legalIdentity,
     queryFn: () => getKey<LegalIdentity>("legal_identity", DEFAULT_LEGAL_IDENTITY),
     staleTime: 60_000,
   });
+export function useLegalIdentity() {
+  return useQuery(legalIdentityQueryOptions());
 }
-export function useLegalTerms() {
-  return useQuery({
+export const legalTermsQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.legalTerms,
     queryFn: () => getKey<LegalDoc>("legal_terms", DEFAULT_LEGAL_TERMS),
     staleTime: 60_000,
   });
+export function useLegalTerms() {
+  return useQuery(legalTermsQueryOptions());
 }
-export function useLegalPrivacy() {
-  return useQuery({
+export const legalPrivacyQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.legalPrivacy,
     queryFn: () => getKey<LegalDoc>("legal_privacy", DEFAULT_LEGAL_PRIVACY),
     staleTime: 60_000,
   });
+export function useLegalPrivacy() {
+  return useQuery(legalPrivacyQueryOptions());
 }
-export function useLegalReturns() {
-  return useQuery({
+export const legalReturnsQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.legalReturns,
     queryFn: () => getKey<LegalDoc>("legal_returns", DEFAULT_LEGAL_RETURNS),
     staleTime: 60_000,
   });
+export function useLegalReturns() {
+  return useQuery(legalReturnsQueryOptions());
 }
 
-export function useHomeContent() {
-  return useQuery({
+export const homeContentQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.home,
     queryFn: () => getKey<HomeContent>("home", DEFAULT_HOME),
     staleTime: 60_000,
   });
+export function useHomeContent() {
+  return useQuery(homeContentQueryOptions());
 }
-export function useContactContent() {
-  return useQuery({
+export const contactContentQueryOptions = () =>
+  queryOptions({
     queryKey: cmsKeys.contact,
     queryFn: () => getKey<ContactContent>("contact", DEFAULT_CONTACT),
     staleTime: 60_000,
   });
+export function useContactContent() {
+  return useQuery(contactContentQueryOptions());
 }
 export function useVisualContent() {
   return useQuery({
@@ -588,8 +600,8 @@ export function useVisualContent() {
   });
 }
 
-export function usePromoPacks(onlyActive = true) {
-  return useQuery({
+export const promoPacksQueryOptions = (onlyActive = true) =>
+  queryOptions({
     queryKey: [...cmsKeys.packs, onlyActive],
     queryFn: async () => {
       let q = supabase.from("promo_packs").select("*").order("sort_order");
@@ -600,6 +612,8 @@ export function usePromoPacks(onlyActive = true) {
     },
     staleTime: 60_000,
   });
+export function usePromoPacks(onlyActive = true) {
+  return useQuery(promoPacksQueryOptions(onlyActive));
 }
 
 export function usePromoPack(id: string | undefined) {
@@ -629,8 +643,8 @@ export function useCatalogCategories(onlyActive = true) {
   });
 }
 
-export function useFaqs(onlyActive = true) {
-  return useQuery({
+export const faqsQueryOptions = (onlyActive = true) =>
+  queryOptions({
     queryKey: [...cmsKeys.faqs, onlyActive],
     queryFn: async () => {
       let q = supabase.from("faqs").select("*").order("sort_order");
@@ -642,6 +656,8 @@ export function useFaqs(onlyActive = true) {
     },
     staleTime: 60_000,
   });
+export function useFaqs(onlyActive = true) {
+  return useQuery(faqsQueryOptions(onlyActive));
 }
 
 export function useBanners(onlyActive = true) {

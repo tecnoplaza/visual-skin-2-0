@@ -125,15 +125,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón" },
-      { name: "description", content: "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa." },
-      { property: "og:title", content: "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón" },
-      { property: "og:description", content: "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa." },
       { property: "og:type", content: "website" },
+      { property: "og:locale", content: "es_CL" },
       { property: "og:site_name", content: "VISUALSKIN" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón" },
-      { name: "twitter:description", content: "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa." },
+      { name: "twitter:card", content: "summary" },
     ],
     links: [
       {
@@ -151,7 +146,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="es" className="dark">
+    <html lang="es-CL" className="dark">
       <head>
         <HeadContent />
         <link rel="preconnect" href="https://fonts.googleapis.com" />

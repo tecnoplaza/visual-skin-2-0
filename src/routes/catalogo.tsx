@@ -1,16 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { packs as fallbackPacks } from "../lib/mock-data";
-import { usePromoPacks } from "@/lib/cms";
+import { promoPacksQueryOptions, usePromoPacks } from "@/lib/cms";
+import { buildSeoHead } from "@/lib/seo";
+
+const TITLE = "Catálogo — VISUALSKIN";
+const DESCRIPTION = "Explora todos nuestros packs urbanos: carcasa + polera o polerón. Ediciones limitadas y bestsellers.";
 
 export const Route = createFileRoute("/catalogo")({
   component: Catalogo,
-  head: () => ({
-    meta: [
-      { title: "Catálogo — VISUALSKIN" },
-      { name: "description", content: "Explora todos nuestros packs urbanos: carcasa + polera o polerón. Ediciones limitadas y bestsellers." },
-    ],
-  }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(promoPacksQueryOptions(true)).catch(() => []),
+  head: () => buildSeoHead({ pathname: "/catalogo", title: TITLE, description: DESCRIPTION }),
 });
 
 const TYPE_LABEL: Record<string, string> = {
@@ -21,7 +21,9 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 function Catalogo() {
-  const { data: cmsPacks = [] } = usePromoPacks(true);
+  const initialPacks = Route.useLoaderData();
+  const { data: queriedPacks } = usePromoPacks(true);
+  const cmsPacks = queriedPacks ?? initialPacks;
   const [filter, setFilter] = useState<string>("all");
 
   const items = cmsPacks.length > 0
@@ -71,7 +73,7 @@ function Catalogo() {
         {filtered.map((p) => (
           <div key={p.id} className="group overflow-hidden rounded-2xl border border-border bg-card transition-all hover:border-neon-green/50">
             <div className={`relative aspect-[4/5] bg-gradient-to-br ${p.gradient}`}>
-              {p.image_url && <img src={p.image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+              {p.image_url && <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
               <div className="absolute inset-0 bg-black/10 transition-opacity group-hover:opacity-0" />
               {p.tag && <span className="absolute left-3 top-3 rounded-full bg-background/80 px-2 py-1 text-[10px] font-semibold backdrop-blur">{p.tag}</span>}
               <span className="absolute right-3 top-3 rounded-full bg-background/80 px-2 py-1 text-[10px] font-medium backdrop-blur">

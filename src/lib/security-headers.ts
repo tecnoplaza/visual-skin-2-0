@@ -13,6 +13,7 @@ import {
   getServerConfig,
   getSupabaseAdminUrl,
 } from "@/lib/server-config";
+import { PRIVATE_ROBOTS_DIRECTIVE } from "@/lib/seo";
 
 const MP_HOSTS = [
   "https://sdk.mercadopago.com",
@@ -122,6 +123,7 @@ export const ORDER_SECURITY_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   "Cross-Origin-Opener-Policy": "same-origin",
+  "X-Robots-Tag": PRIVATE_ROBOTS_DIRECTIVE,
 };
 
 export function applyOrderSecurityHeaders(response: Response): Response {
