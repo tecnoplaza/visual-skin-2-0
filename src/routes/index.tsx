@@ -1,8 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight, Zap, Palette, Truck, ShieldCheck, Star, Smartphone, Shirt } from "lucide-react";
 import { packs as fallbackPacks } from "../lib/mock-data";
-import { DEFAULT_CONTACT, DEFAULT_HOME, contactContentQueryOptions, facebookUrl, homeContentQueryOptions, instagramUrl, promoPacksQueryOptions, useContactContent, useHomeContent, usePromoPacks } from "@/lib/cms";
+import { DEFAULT_CONTACT, DEFAULT_HOME, contactContentQueryOptions, facebookUrl, homeContentQueryOptions, instagramUrl, promoPacksQueryOptions, useContactContent, useHomeContent, usePromoPacks, type PromoPack } from "@/lib/cms";
 import { buildSeoHead, organizationJsonLd, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
+import { canonicalPromoPackPricing, productPathForPack, publicProductImage, uniqueActiveProductPacks } from "@/lib/product-seo";
 
 const HOME_TITLE = "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón";
 const HOME_DESCRIPTION = "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa.";
@@ -29,6 +30,7 @@ function Home() {
   const contact = queriedContact ?? initial.contact;
   const sameAs = [instagramUrl(contact.instagram), facebookUrl(contact.facebook)].filter((url): url is string => Boolean(url));
   const cmsPacks = queriedPacks ?? initial.packs;
+  const heroPacks = uniqueActiveProductPacks(cmsPacks ?? []);
   const packs = (cmsPacks && cmsPacks.length > 0) ? cmsPacks.map((p) => ({
     id: p.id, name: p.name, tag: p.tag, gradient: p.gradient || "from-blue-500 to-cyan-400",
     price: Number(p.sale_price ?? p.price), image_url: p.image_url, description: p.description,
@@ -88,17 +90,8 @@ function Home() {
                 <img src={home.hero_image_url} alt={home.hero_title?.trim() || DEFAULT_HOME.hero_title.replace("\n", " ")} decoding="async" fetchPriority="high" className="mx-auto rounded-2xl border border-border" />
               </div>
             ) : (
-              <div className="mx-auto mt-16 grid max-w-4xl grid-cols-2 gap-4 md:grid-cols-3">
-                {packs.slice(0, 3).map((p, i) => (
-                  <div key={p.id} className={`group relative aspect-[3/4] overflow-hidden rounded-2xl border border-border bg-gradient-to-br ${p.gradient} p-4 transition-transform hover:-translate-y-1 ${i === 1 ? "md:translate-y-6" : ""}`}>
-                    {p.image_url && <img src={p.image_url} alt={p.name} decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
-                    <div className="absolute inset-0 bg-black/20" />
-                    <div className="relative flex h-full flex-col justify-between text-white">
-                      <span className="w-fit rounded-full bg-white/20 px-2 py-1 text-[10px] backdrop-blur">{p.tag || "Pack"}</span>
-                      <div className="font-display text-lg font-bold">{p.name}</div>
-                    </div>
-                  </div>
-                ))}
+              <div className="mx-auto mt-16 grid max-w-7xl grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+                {heroPacks.map((pack) => <HeroProductCard key={pack.id} pack={pack} />)}
               </div>
             )}
           </div>
@@ -199,5 +192,32 @@ function Home() {
         </section>
       )}
     </>
+  );
+}
+
+function HeroProductCard({ pack }: { pack: PromoPack }) {
+  const pathname = productPathForPack(pack);
+  const pricing = canonicalPromoPackPricing(pack);
+  const image = publicProductImage(pack.image_url);
+  const tag = pack.tag?.trim();
+  if (!pathname) return null;
+
+  return (
+    <Link
+      to={pathname}
+      className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/90 text-left shadow-lg shadow-black/10 transition duration-200 hover:-translate-y-1 hover:border-neon-blue/60 hover:shadow-neon-blue/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-blue focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transform-none motion-reduce:transition-none"
+    >
+      <div className={`relative aspect-[4/5] overflow-hidden bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"}`}>
+        {image && <img src={image} alt={pack.name} decoding="async" className="absolute inset-0 h-full w-full object-contain" />}
+      </div>
+      <div className="flex flex-1 flex-col gap-3 border-t border-border/70 p-5">
+        {tag && <span className="w-fit max-w-full rounded-full border border-neon-blue/30 bg-neon-blue/10 px-3 py-1 text-xs font-semibold text-neon-blue">{tag}</span>}
+        <h2 className="font-display text-xl font-bold leading-tight text-foreground">{pack.name}</h2>
+        {pricing && <p className="font-mono text-lg font-bold text-neon-green">${pricing.effectivePrice.toLocaleString("es-CL")} CLP</p>}
+        <span className="mt-auto inline-flex items-center gap-2 pt-1 text-sm font-semibold text-foreground">
+          Ver producto <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1 motion-reduce:transform-none" />
+        </span>
+      </div>
+    </Link>
   );
 }

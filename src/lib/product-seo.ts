@@ -65,6 +65,13 @@ export function resolveActiveProduct(slug: string, packs: readonly PromoPack[]):
   return matches.length === 1 ? matches[0] : null;
 }
 
+export function uniqueActiveProductPacks(packs: readonly PromoPack[]): PromoPack[] {
+  return packs.filter((pack) => {
+    const slug = productSlugForPackType(pack.pack_type);
+    return slug != null && resolveActiveProduct(slug, packs)?.id === pack.id;
+  });
+}
+
 export function publicProductImage(imageUrl: string | null | undefined): string | undefined {
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl.trim())) return undefined;
   try {
