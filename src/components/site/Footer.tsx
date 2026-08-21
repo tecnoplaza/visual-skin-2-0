@@ -21,7 +21,7 @@ export function Footer() {
 
   return (
     <footer className="border-t border-border/60 bg-background">
-      <div className={`mx-auto grid max-w-7xl gap-8 px-4 py-12 ${hasSocial ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+      <div className={`mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:grid-cols-2 ${hasSocial ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
         <div>
           <div className="flex items-center gap-2 font-display text-lg font-bold">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-neon-blue to-neon-green text-background">
@@ -39,6 +39,15 @@ export function Footer() {
             <li><Link to="/catalogo" className="hover:text-foreground">Catálogo</Link></li>
             <li><Link to="/crear-mi-pack" className="hover:text-foreground">Crear pack</Link></li>
             <li><Link to="/personalizador" className="hover:text-foreground">Personalizador</Link></li>
+          </ul>
+        </div>
+        <div>
+          <h4 className="text-sm font-semibold">Personalizados</h4>
+          <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
+            <li><Link to="/carcasas-personalizadas" className="hover:text-foreground">Carcasas personalizadas</Link></li>
+            <li><Link to="/poleras-personalizadas" className="hover:text-foreground">Poleras personalizadas</Link></li>
+            <li><Link to="/polerones-personalizados" className="hover:text-foreground">Polerones personalizados</Link></li>
+            <li><Link to="/packs-personalizados" className="hover:text-foreground">Packs personalizados</Link></li>
           </ul>
         </div>
         <div>

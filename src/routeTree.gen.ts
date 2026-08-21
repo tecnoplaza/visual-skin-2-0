@@ -12,12 +12,16 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as CambiosYDevolucionesRouteImport } from './routes/cambios-y-devoluciones'
+import { Route as CarcasasPersonalizadasRouteImport } from './routes/carcasas-personalizadas'
 import { Route as CarritoRouteImport } from './routes/carrito'
 import { Route as CatalogoRouteImport } from './routes/catalogo'
 import { Route as ContactoRouteImport } from './routes/contacto'
 import { Route as CrearMiPackRouteImport } from './routes/crear-mi-pack'
 import { Route as FaqRouteImport } from './routes/faq'
+import { Route as PacksPersonalizadosRouteImport } from './routes/packs-personalizados'
 import { Route as PersonalizadorRouteImport } from './routes/personalizador'
+import { Route as PolerasPersonalizadasRouteImport } from './routes/poleras-personalizadas'
+import { Route as PoleronesPersonalizadosRouteImport } from './routes/polerones-personalizados'
 import { Route as PrivacidadRouteImport } from './routes/privacidad'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as TerminosRouteImport } from './routes/terminos'
@@ -47,6 +51,11 @@ const CambiosYDevolucionesRoute = CambiosYDevolucionesRouteImport.update({
   path: '/cambios-y-devoluciones',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CarcasasPersonalizadasRoute = CarcasasPersonalizadasRouteImport.update({
+  id: '/carcasas-personalizadas',
+  path: '/carcasas-personalizadas',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CarritoRoute = CarritoRouteImport.update({
   id: '/carrito',
   path: '/carrito',
@@ -72,9 +81,24 @@ const FaqRoute = FaqRouteImport.update({
   path: '/faq',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PacksPersonalizadosRoute = PacksPersonalizadosRouteImport.update({
+  id: '/packs-personalizados',
+  path: '/packs-personalizados',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PersonalizadorRoute = PersonalizadorRouteImport.update({
   id: '/personalizador',
   path: '/personalizador',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PolerasPersonalizadasRoute = PolerasPersonalizadasRouteImport.update({
+  id: '/poleras-personalizadas',
+  path: '/poleras-personalizadas',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PoleronesPersonalizadosRoute = PoleronesPersonalizadosRouteImport.update({
+  id: '/polerones-personalizados',
+  path: '/polerones-personalizados',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacidadRoute = PrivacidadRouteImport.update({
@@ -150,12 +174,16 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carcasas-personalizadas': typeof CarcasasPersonalizadasRoute
   '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
   '/faq': typeof FaqRoute
+  '/packs-personalizados': typeof PacksPersonalizadosRoute
   '/personalizador': typeof PersonalizadorRoute
+  '/poleras-personalizadas': typeof PolerasPersonalizadasRoute
+  '/polerones-personalizados': typeof PoleronesPersonalizadosRoute
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
@@ -174,12 +202,16 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carcasas-personalizadas': typeof CarcasasPersonalizadasRoute
   '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
   '/faq': typeof FaqRoute
+  '/packs-personalizados': typeof PacksPersonalizadosRoute
   '/personalizador': typeof PersonalizadorRoute
+  '/poleras-personalizadas': typeof PolerasPersonalizadasRoute
+  '/polerones-personalizados': typeof PoleronesPersonalizadosRoute
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
@@ -199,12 +231,16 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/cambios-y-devoluciones': typeof CambiosYDevolucionesRoute
+  '/carcasas-personalizadas': typeof CarcasasPersonalizadasRoute
   '/carrito': typeof CarritoRoute
   '/catalogo': typeof CatalogoRoute
   '/contacto': typeof ContactoRoute
   '/crear-mi-pack': typeof CrearMiPackRoute
   '/faq': typeof FaqRoute
+  '/packs-personalizados': typeof PacksPersonalizadosRoute
   '/personalizador': typeof PersonalizadorRoute
+  '/poleras-personalizadas': typeof PolerasPersonalizadasRoute
+  '/polerones-personalizados': typeof PoleronesPersonalizadosRoute
   '/privacidad': typeof PrivacidadRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terminos': typeof TerminosRoute
@@ -225,12 +261,16 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carcasas-personalizadas'
     | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
     | '/faq'
+    | '/packs-personalizados'
     | '/personalizador'
+    | '/poleras-personalizadas'
+    | '/polerones-personalizados'
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
@@ -249,12 +289,16 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carcasas-personalizadas'
     | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
     | '/faq'
+    | '/packs-personalizados'
     | '/personalizador'
+    | '/poleras-personalizadas'
+    | '/polerones-personalizados'
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
@@ -273,12 +317,16 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/cambios-y-devoluciones'
+    | '/carcasas-personalizadas'
     | '/carrito'
     | '/catalogo'
     | '/contacto'
     | '/crear-mi-pack'
     | '/faq'
+    | '/packs-personalizados'
     | '/personalizador'
+    | '/poleras-personalizadas'
+    | '/polerones-personalizados'
     | '/privacidad'
     | '/sitemap.xml'
     | '/terminos'
@@ -298,12 +346,16 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
   CambiosYDevolucionesRoute: typeof CambiosYDevolucionesRoute
+  CarcasasPersonalizadasRoute: typeof CarcasasPersonalizadasRoute
   CarritoRoute: typeof CarritoRoute
   CatalogoRoute: typeof CatalogoRoute
   ContactoRoute: typeof ContactoRoute
   CrearMiPackRoute: typeof CrearMiPackRoute
   FaqRoute: typeof FaqRoute
+  PacksPersonalizadosRoute: typeof PacksPersonalizadosRoute
   PersonalizadorRoute: typeof PersonalizadorRoute
+  PolerasPersonalizadasRoute: typeof PolerasPersonalizadasRoute
+  PoleronesPersonalizadosRoute: typeof PoleronesPersonalizadosRoute
   PrivacidadRoute: typeof PrivacidadRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   TerminosRoute: typeof TerminosRoute
@@ -336,6 +388,13 @@ declare module '@tanstack/react-router' {
       path: '/cambios-y-devoluciones'
       fullPath: '/cambios-y-devoluciones'
       preLoaderRoute: typeof CambiosYDevolucionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/carcasas-personalizadas': {
+      id: '/carcasas-personalizadas'
+      path: '/carcasas-personalizadas'
+      fullPath: '/carcasas-personalizadas'
+      preLoaderRoute: typeof CarcasasPersonalizadasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/carrito': {
@@ -373,11 +432,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FaqRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/packs-personalizados': {
+      id: '/packs-personalizados'
+      path: '/packs-personalizados'
+      fullPath: '/packs-personalizados'
+      preLoaderRoute: typeof PacksPersonalizadosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/personalizador': {
       id: '/personalizador'
       path: '/personalizador'
       fullPath: '/personalizador'
       preLoaderRoute: typeof PersonalizadorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/poleras-personalizadas': {
+      id: '/poleras-personalizadas'
+      path: '/poleras-personalizadas'
+      fullPath: '/poleras-personalizadas'
+      preLoaderRoute: typeof PolerasPersonalizadasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/polerones-personalizados': {
+      id: '/polerones-personalizados'
+      path: '/polerones-personalizados'
+      fullPath: '/polerones-personalizados'
+      preLoaderRoute: typeof PoleronesPersonalizadosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacidad': {
@@ -514,12 +594,16 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   CambiosYDevolucionesRoute: CambiosYDevolucionesRoute,
+  CarcasasPersonalizadasRoute: CarcasasPersonalizadasRoute,
   CarritoRoute: CarritoRoute,
   CatalogoRoute: CatalogoRoute,
   ContactoRoute: ContactoRoute,
   CrearMiPackRoute: CrearMiPackRoute,
   FaqRoute: FaqRoute,
+  PacksPersonalizadosRoute: PacksPersonalizadosRoute,
   PersonalizadorRoute: PersonalizadorRoute,
+  PolerasPersonalizadasRoute: PolerasPersonalizadasRoute,
+  PoleronesPersonalizadosRoute: PoleronesPersonalizadosRoute,
   PrivacidadRoute: PrivacidadRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   TerminosRoute: TerminosRoute,
