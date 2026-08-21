@@ -105,14 +105,22 @@ test("precio SEO replica validación canónica del backend y omite Offer inváli
   }
 });
 
-test("imagen Product exige HTTP público y rechaza esquemas o URLs firmadas", () => {
+test("imagen Product acepta media comercial pública y rechaza URLs privadas o esquemas inseguros", () => {
   assert.equal(publicProductImage("https://cdn.example.com/pack.jpg"), "https://cdn.example.com/pack.jpg");
+  const cmsImage = "https://project-prod.lovable.cloud/storage/v1/object/sign/cms-media/packs/pack.jfif?token=public-cms-delivery";
+  assert.equal(publicProductImage(cmsImage), cmsImage);
+  const item = pack({ image_url: cmsImage, tag: "Envío Gratis" });
+  assert.equal(productJsonLd(item, productPathForPack(item)!).image, cmsImage);
+  const head = buildSeoHead({ pathname: productPathForPack(item)!, title: item.name, description: item.description, type: "product", image: publicProductImage(item.image_url) });
+  assert.equal(head.meta.find((meta) => meta.property === "og:image")?.content, cmsImage);
   for (const image of [
     "/pack.jpg",
     "data:image/png;base64,abc",
     "javascript:alert(1)",
     "blob:https://visualskin.cl/id",
     "https://project.supabase.co/storage/v1/object/sign/private/file.png?token=secret",
+    "https://project-prod.lovable.cloud/storage/v1/object/sign/design-assets/private.png?token=secret",
+    "https://evil.example/storage/v1/object/sign/cms-media/packs/pack.png?token=secret",
     "https://cdn.example.com/file.png?signature=secret",
   ]) assert.equal(publicProductImage(image), undefined);
 });
@@ -159,6 +167,11 @@ test("ruta SSR conserva 404 real, breadcrumbs, JSON-LD y CTA al personalizador",
   const customizer = read("../routes/personalizador.tsx");
   assert.match(customizer, /type Search = \{ pack\?: PackId; id\?: string/);
   assert.match(route, /pricing &&/);
+  assert.match(route, /<img src=\{image\} alt=\{pack\.name\}/);
+  assert.match(route, /absolute inset-0 h-full w-full object-cover/);
+  assert.match(route, /const tag = pack\.tag\?\.trim\(\)/);
+  assert.match(route, /\{tag && <p[^>]*>\{tag\}<\/p>\}/);
+  assert.doesNotMatch(route, /Pack personalizable/i);
   assert.doesNotMatch(route, /preview_url|original|design_assets|final_designs/);
 });
 

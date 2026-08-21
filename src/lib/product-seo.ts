@@ -70,9 +70,14 @@ export function publicProductImage(imageUrl: string | null | undefined): string 
   try {
     const parsed = new URL(imageUrl.trim());
     if (parsed.username || parsed.password) return undefined;
-    if (/\/storage\/v1\/object\/sign\//i.test(parsed.pathname)) return undefined;
+    const isTrustedCmsPackImage =
+      parsed.hostname.endsWith(".lovable.cloud") &&
+      /^\/storage\/v1\/object\/sign\/cms-media\/packs\/[^/]+$/i.test(parsed.pathname) &&
+      parsed.searchParams.has("token") &&
+      [...parsed.searchParams.keys()].every((key) => key === "token");
+    if (/\/storage\/v1\/object\/sign\//i.test(parsed.pathname) && !isTrustedCmsPackImage) return undefined;
     const privateParams = ["token", "signature", "x-amz-signature"];
-    if (privateParams.some((key) => parsed.searchParams.has(key))) return undefined;
+    if (!isTrustedCmsPackImage && privateParams.some((key) => parsed.searchParams.has(key))) return undefined;
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : undefined;
   } catch {
     return undefined;

@@ -40,6 +40,7 @@ function ProductPage() {
   const pathname = productPathForPack(pack)!;
   const pricing = canonicalPromoPackPricing(pack);
   const image = publicProductImage(pack.image_url);
+  const tag = pack.tag?.trim();
   const breadcrumbs: BreadcrumbEntry[] = [
     { name: "Inicio", pathname: "/" },
     { name: "Packs personalizados", pathname: "/packs-personalizados" },
@@ -64,15 +65,15 @@ function ProductPage() {
         </nav>
 
         <article className="grid gap-10 lg:grid-cols-2 lg:items-start">
-          <div className="overflow-hidden rounded-3xl border border-border bg-card">
+          <div className={`relative aspect-square overflow-hidden rounded-3xl border border-border bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"}`}>
             {image ? (
-              <img src={image} alt={pack.name} className="aspect-square h-full w-full object-cover" fetchPriority="high" />
+              <img src={image} alt={pack.name} className="absolute inset-0 h-full w-full object-cover" fetchPriority="high" />
             ) : (
-              <div className={`aspect-square bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"}`} />
+              <div className="h-full w-full" />
             )}
           </div>
           <div className="lg:py-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-neon-blue">Pack personalizable</p>
+            {tag && <p className="text-xs font-semibold uppercase tracking-[0.24em] text-neon-blue">{tag}</p>}
             <h1 className="mt-3 font-display text-4xl font-bold tracking-tight md:text-6xl">{pack.name}</h1>
             {pack.description && <p className="mt-5 text-lg leading-8 text-muted-foreground">{pack.description}</p>}
             {pricing && (
