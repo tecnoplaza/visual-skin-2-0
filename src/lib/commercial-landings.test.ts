@@ -90,3 +90,11 @@ test("FAQ visible y JSON-LD comparten la misma fuente sin schemas inventados", (
   assert.match(component, /\"@type\": \"ItemList\"/);
   assert.doesNotMatch(component, /\"@type\": \"(?:Product|Offer|Review|AggregateRating)\"|availability|rating|stock|sku|gtin|mpn/i);
 });
+
+test("breadcrumbs visibles y BreadcrumbList comparten la misma fuente", () => {
+  const component = read("../components/seo/CommercialLanding.tsx");
+  assert.match(component, /aria-label="Migas de pan"/);
+  assert.match(component, /breadcrumbJsonLd\(breadcrumbs\)/);
+  assert.match(component, /aria-current="page"/);
+  assert.match(component, /name: "Packs personalizados", pathname: "\/packs-personalizados"/);
+});

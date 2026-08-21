@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight, Zap, Palette, Truck, ShieldCheck, Star, Smartphone, Shirt } from "lucide-react";
 import { packs as fallbackPacks } from "../lib/mock-data";
-import { DEFAULT_HOME, homeContentQueryOptions, promoPacksQueryOptions, useHomeContent, usePromoPacks } from "@/lib/cms";
-import { buildSeoHead, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
+import { DEFAULT_CONTACT, DEFAULT_HOME, contactContentQueryOptions, facebookUrl, homeContentQueryOptions, instagramUrl, promoPacksQueryOptions, useContactContent, useHomeContent, usePromoPacks } from "@/lib/cms";
+import { buildSeoHead, organizationJsonLd, serializeJsonLd, websiteJsonLd } from "@/lib/seo";
 
 const HOME_TITLE = "VISUALSKIN — Diseña tu pack: carcasa + polera o polerón";
 const HOME_DESCRIPTION = "Pack urbano 100% personalizado. Elige tu modelo de celular, sube tu diseño y recíbelo en casa.";
@@ -10,11 +10,12 @@ const HOME_DESCRIPTION = "Pack urbano 100% personalizado. Elige tu modelo de cel
 export const Route = createFileRoute("/")({
   component: Home,
   loader: async ({ context }) => {
-    const [home, packs] = await Promise.all([
+    const [home, packs, contact] = await Promise.all([
       context.queryClient.ensureQueryData(homeContentQueryOptions()).catch(() => DEFAULT_HOME),
       context.queryClient.ensureQueryData(promoPacksQueryOptions(true)).catch(() => []),
+      context.queryClient.ensureQueryData(contactContentQueryOptions()).catch(() => DEFAULT_CONTACT),
     ]);
-    return { home, packs };
+    return { home, packs, contact };
   },
   head: () => buildSeoHead({ pathname: "/", title: HOME_TITLE, description: HOME_DESCRIPTION }),
 });
@@ -23,7 +24,10 @@ function Home() {
   const initial = Route.useLoaderData();
   const { data: queriedHome } = useHomeContent();
   const { data: queriedPacks } = usePromoPacks(true);
+  const { data: queriedContact } = useContactContent();
   const home = queriedHome ?? initial.home;
+  const contact = queriedContact ?? initial.contact;
+  const sameAs = [instagramUrl(contact.instagram), facebookUrl(contact.facebook)].filter((url): url is string => Boolean(url));
   const cmsPacks = queriedPacks ?? initial.packs;
   const packs = (cmsPacks && cmsPacks.length > 0) ? cmsPacks.map((p) => ({
     id: p.id, name: p.name, tag: p.tag, gradient: p.gradient || "from-blue-500 to-cyan-400",
@@ -42,6 +46,10 @@ function Home() {
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(websiteJsonLd()) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(organizationJsonLd(sameAs)) }}
       />
       {sections.hero && (
         <section className="relative overflow-hidden">

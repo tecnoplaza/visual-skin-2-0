@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   CANONICAL_ORIGIN,
   buildSeoHead,
+  breadcrumbJsonLd,
   canonicalUrl,
   normalizeSeoPathname,
+  organizationJsonLd,
   renderSitemap,
   serializeJsonLd,
   websiteJsonLd,
@@ -16,6 +18,29 @@ test("canonical siempre usa el origen de producción y elimina query/hash", () =
   assert.equal(canonicalUrl("/personalizador?pack=carcasa&editItem=secret"), "https://www.visualskin.cl/personalizador");
   assert.equal(canonicalUrl("/"), "https://www.visualskin.cl/");
   assert.equal(normalizeSeoPathname("//catalogo///"), "/catalogo");
+});
+
+test("Organization usa solo identidad verificada y sameAs suministrado", () => {
+  assert.deepEqual(organizationJsonLd(["https://instagram.com/visualskin.cl"]), {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "VISUALSKIN",
+    legalName: "TECNOPLAZA SpA",
+    url: "https://www.visualskin.cl/",
+    sameAs: ["https://instagram.com/visualskin.cl"],
+  });
+  assert.doesNotMatch(JSON.stringify(organizationJsonLd()), /address|telephone|logo|rating|rut/i);
+});
+
+test("BreadcrumbList conserva la jerarquía visible y URLs canónicas", () => {
+  const data = breadcrumbJsonLd([
+    { name: "Inicio", pathname: "/" },
+    { name: "Packs personalizados", pathname: "/packs-personalizados" },
+    { name: "Poleras personalizadas", pathname: "/poleras-personalizadas?pack=x" },
+  ]);
+  assert.equal(data.itemListElement.length, 3);
+  assert.equal(data.itemListElement[2].item, "https://www.visualskin.cl/poleras-personalizadas");
+  assert.deepEqual(data.itemListElement.map((item) => item.position), [1, 2, 3]);
 });
 
 test("sitemap solo emite URLs limpias del host canónico", () => {

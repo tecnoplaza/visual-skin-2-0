@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check, Palette, Smartphone, Upload } from "lucide-react";
 import { usePromoPacks, type PromoPack } from "@/lib/cms";
-import { canonicalUrl, serializeJsonLd } from "@/lib/seo";
+import { breadcrumbJsonLd, canonicalUrl, serializeJsonLd, type BreadcrumbEntry } from "@/lib/seo";
 import { COMMERCIAL_LANDINGS, packsForLanding, type CommercialLandingSlug } from "@/lib/commercial-landings";
 
 type Props = { slug: CommercialLandingSlug; initialPacks: PromoPack[] };
@@ -11,9 +11,15 @@ export function CommercialLanding({ slug, initialPacks }: Props) {
   const { data: queriedPacks } = usePromoPacks(true);
   const packs = packsForLanding(slug, queriedPacks ?? initialPacks);
   const ctaSearch = config.ctaPack ? ({ pack: config.ctaPack } as const) : undefined;
+  const breadcrumbs: BreadcrumbEntry[] = [
+    { name: "Inicio", pathname: "/" },
+    ...(slug === "packs-personalizados" ? [] : [{ name: "Packs personalizados", pathname: "/packs-personalizados" }]),
+    { name: config.heading, pathname: `/${slug}` },
+  ];
   const structuredData = {
     "@context": "https://schema.org",
     "@graph": [
+      breadcrumbJsonLd(breadcrumbs),
       ...(packs.length > 0 ? [{
           "@type": "ItemList",
           name: config.productsHeading,
@@ -43,6 +49,14 @@ export function CommercialLanding({ slug, initialPacks }: Props) {
           <div className="absolute inset-0 grid-bg opacity-30" />
           <div className="absolute -right-32 -top-32 h-80 w-80 rounded-full bg-neon-blue/15 blur-3xl" />
           <div className="relative mx-auto max-w-5xl px-4 py-16 text-center md:py-24">
+            <nav aria-label="Migas de pan" className="mb-6 flex flex-wrap justify-center gap-2 text-sm text-muted-foreground">
+              {breadcrumbs.map((entry, index) => (
+                <span key={entry.pathname} className="inline-flex items-center gap-2">
+                  {index < breadcrumbs.length - 1 ? <Link to={entry.pathname} className="hover:text-foreground">{entry.name}</Link> : <span aria-current="page">{entry.name}</span>}
+                  {index < breadcrumbs.length - 1 && <span aria-hidden="true">/</span>}
+                </span>
+              ))}
+            </nav>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-neon-blue">{config.eyebrow}</p>
             <h1 className="mt-4 font-display text-4xl font-bold tracking-tight md:text-6xl">{config.heading}</h1>
             <p className="mx-auto mt-5 max-w-3xl text-base leading-7 text-muted-foreground md:text-lg">{config.introduction}</p>

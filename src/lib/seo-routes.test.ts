@@ -36,3 +36,11 @@ test("metadata privada no incorpora canonical, tokens ni JSON-LD", () => {
   const head = pedido.slice(pedido.indexOf("head:"), pedido.indexOf("function PedidoView"));
   assert.doesNotMatch(head, /canonical|og:url|application\/ld\+json|token/);
 });
+
+test("home precarga Organization y sameAs desde el CMS público", () => {
+  const home = read("../routes/index.tsx");
+  assert.match(home, /ensureQueryData\(contactContentQueryOptions\(\)\)/);
+  assert.match(home, /organizationJsonLd\(sameAs\)/);
+  assert.match(home, /instagramUrl\(contact\.instagram\)/);
+  assert.match(home, /facebookUrl\(contact\.facebook\)/);
+});

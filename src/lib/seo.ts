@@ -70,6 +70,32 @@ export function websiteJsonLd() {
   } as const;
 }
 
+export function organizationJsonLd(sameAs: readonly string[] = []) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: DEFAULT_SITE_NAME,
+    legalName: "TECNOPLAZA SpA",
+    url: `${CANONICAL_ORIGIN}/`,
+    ...(sameAs.length > 0 ? { sameAs: [...sameAs] } : {}),
+  } as const;
+}
+
+export type BreadcrumbEntry = { name: string; pathname: string };
+
+export function breadcrumbJsonLd(entries: readonly BreadcrumbEntry[]) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: entries.map((entry, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: entry.name,
+      item: canonicalUrl(entry.pathname),
+    })),
+  } as const;
+}
+
 export function serializeJsonLd(value: unknown): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")
