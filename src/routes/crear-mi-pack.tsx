@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Shirt, Package, Smartphone, Loader2 } from "lucide-react";
 import { promoPacksQueryOptions, usePromoPacks, type PromoPack } from "@/lib/cms";
 import { buildSeoHead } from "@/lib/seo";
+import { canonicalPromoPackPricing, productPathForPack } from "@/lib/product-seo";
 
 const TITLE = "Crear mi pack — VISUALSKIN";
 const DESCRIPTION = "Elige tu combo: solo carcasa, carcasa + polera o carcasa + polerón. 100% personalizado.";
@@ -55,8 +56,7 @@ function CrearPack() {
 function PackCard({ pack }: { pack: PromoPack }) {
   const Icon = ICONS[pack.pack_type] ?? Smartphone;
   const { grad, text } = ACCENTS[pack.pack_type] ?? ACCENTS["carcasa+polera"];
-  const displayPrice = Number(pack.sale_price ?? pack.price);
-  const hasSale = pack.sale_price != null && Number(pack.sale_price) < Number(pack.price);
+  const pricing = canonicalPromoPackPricing(pack);
 
   return (
     <div className="group relative overflow-hidden rounded-3xl border border-border bg-card p-8 transition-all hover:border-neon-blue/50 hover:-translate-y-1">
@@ -70,13 +70,13 @@ function PackCard({ pack }: { pack: PromoPack }) {
           </div>
         )}
         {pack.tag && <span className="ml-2 inline-block rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold">{pack.tag}</span>}
-        <h2 className="mt-4 font-display text-2xl font-bold">{pack.name}</h2>
+        <h2 className="mt-4 font-display text-2xl font-bold"><Link to={productPathForPack(pack) ?? "/crear-mi-pack"}>{pack.name}</Link></h2>
         {pack.description && <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{pack.description}</p>}
-        <div className="mt-2 flex items-baseline gap-2">
-          <span className="font-mono text-3xl font-bold">${displayPrice.toLocaleString("es-CL")}</span>
-          {hasSale && <span className="text-sm text-muted-foreground line-through">${Number(pack.price).toLocaleString("es-CL")}</span>}
+        {pricing && <div className="mt-2 flex items-baseline gap-2">
+          <span className="font-mono text-3xl font-bold">${pricing.effectivePrice.toLocaleString("es-CL")}</span>
+          {pricing.hasSale && <span className="text-sm text-muted-foreground line-through">${pricing.basePrice.toLocaleString("es-CL")}</span>}
           <span className="text-sm text-muted-foreground">CLP</span>
-        </div>
+        </div>}
         {pack.features?.length > 0 && (
           <ul className="mt-6 space-y-2 text-sm text-muted-foreground">
             {pack.features.map((f) => (

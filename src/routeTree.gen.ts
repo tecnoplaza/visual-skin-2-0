@@ -28,6 +28,7 @@ import { Route as TerminosRouteImport } from './routes/terminos'
 import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 import { Route as AdminOrdersRouteImport } from './routes/admin.orders'
 import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
+import { Route as ProductosSlugRouteImport } from './routes/productos.$slug'
 import { Route as AdminAnalyticsSettingsRouteImport } from './routes/admin.analytics.settings'
 import { Route as AdminOrdersIdRouteImport } from './routes/admin.orders.$id'
 import { Route as ApiPublicHooksCleanupRouteImport } from './routes/api/public/hooks/cleanup'
@@ -131,6 +132,11 @@ const PedidoIdRoute = PedidoIdRouteImport.update({
   path: '/pedido/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProductosSlugRoute = ProductosSlugRouteImport.update({
+  id: '/productos/$slug',
+  path: '/productos/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminAnalyticsSettingsRoute = AdminAnalyticsSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -190,6 +196,7 @@ export interface FileRoutesByFullPath {
   '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/productos/$slug': typeof ProductosSlugRoute
   '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
@@ -218,6 +225,7 @@ export interface FileRoutesByTo {
   '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/productos/$slug': typeof ProductosSlugRoute
   '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/admin/orders': typeof AdminOrdersRouteWithChildren
   '/pedido/$id': typeof PedidoIdRoute
+  '/productos/$slug': typeof ProductosSlugRoute
   '/admin/analytics/settings': typeof AdminAnalyticsSettingsRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/api/public/hooks/cleanup': typeof ApiPublicHooksCleanupRoute
@@ -277,6 +286,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/productos/$slug'
     | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
@@ -305,6 +315,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/productos/$slug'
     | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
@@ -333,6 +344,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/orders'
     | '/pedido/$id'
+    | '/productos/$slug'
     | '/admin/analytics/settings'
     | '/admin/orders/$id'
     | '/api/public/hooks/cleanup'
@@ -360,6 +372,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   TerminosRoute: typeof TerminosRoute
   PedidoIdRoute: typeof PedidoIdRoute
+  ProductosSlugRoute: typeof ProductosSlugRoute
   ApiPublicHooksCleanupRoute: typeof ApiPublicHooksCleanupRoute
   ApiPublicHooksCspReportRoute: typeof ApiPublicHooksCspReportRoute
   ApiPublicHooksNotificationsRoute: typeof ApiPublicHooksNotificationsRoute
@@ -502,6 +515,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PedidoIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/productos/$slug': {
+      id: '/productos/$slug'
+      path: '/productos/$slug'
+      fullPath: '/productos/$slug'
+      preLoaderRoute: typeof ProductosSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/analytics/settings': {
       id: '/admin/analytics/settings'
       path: '/settings'
@@ -608,6 +628,7 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   TerminosRoute: TerminosRoute,
   PedidoIdRoute: PedidoIdRoute,
+  ProductosSlugRoute: ProductosSlugRoute,
   ApiPublicHooksCleanupRoute: ApiPublicHooksCleanupRoute,
   ApiPublicHooksCspReportRoute: ApiPublicHooksCspReportRoute,
   ApiPublicHooksNotificationsRoute: ApiPublicHooksNotificationsRoute,

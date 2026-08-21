@@ -3,6 +3,7 @@ import { useState } from "react";
 import { packs as fallbackPacks } from "../lib/mock-data";
 import { promoPacksQueryOptions, usePromoPacks } from "@/lib/cms";
 import { buildSeoHead } from "@/lib/seo";
+import { canonicalPromoPackPricing, productPathForPack } from "@/lib/product-seo";
 
 const TITLE = "Catálogo — VISUALSKIN";
 const DESCRIPTION = "Explora todos nuestros packs urbanos: carcasa + polera o polerón. Ediciones limitadas y bestsellers.";
@@ -27,20 +28,25 @@ function Catalogo() {
   const [filter, setFilter] = useState<string>("all");
 
   const items = cmsPacks.length > 0
-    ? cmsPacks.map((p) => ({
-        id: p.id, name: p.name, description: p.description,
-        price: Number(p.sale_price ?? p.price),
-        basePrice: Number(p.price),
-        hasSale: p.sale_price != null && Number(p.sale_price) < Number(p.price),
-        image_url: p.image_url, tag: p.tag, gradient: p.gradient || "from-blue-500 to-cyan-400",
-        type: p.pack_type,
-        cmsId: p.id,
-      }))
+    ? cmsPacks.map((p) => {
+        const pricing = canonicalPromoPackPricing(p);
+        return {
+          id: p.id, name: p.name, description: p.description,
+          price: pricing?.effectivePrice ?? null,
+          basePrice: pricing?.basePrice ?? null,
+          hasSale: pricing?.hasSale ?? false,
+          image_url: p.image_url, tag: p.tag, gradient: p.gradient || "from-blue-500 to-cyan-400",
+          type: p.pack_type,
+          cmsId: p.id,
+          productPath: productPathForPack(p),
+        };
+      })
     : fallbackPacks.map((p) => ({
         id: p.id, name: p.name, description: p.description, price: p.price,
         basePrice: p.price, hasSale: false,
         image_url: null as string | null, tag: p.tag, gradient: p.gradient, type: p.type,
         cmsId: undefined as string | undefined,
+        productPath: null as string | null,
       }));
 
   const filterOptions = [
@@ -72,23 +78,23 @@ function Catalogo() {
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((p) => (
           <div key={p.id} className="group overflow-hidden rounded-2xl border border-border bg-card transition-all hover:border-neon-green/50">
-            <div className={`relative aspect-[4/5] bg-gradient-to-br ${p.gradient}`}>
+            <Link to={p.productPath ?? "/catalogo"} className={`relative block aspect-[4/5] bg-gradient-to-br ${p.gradient}`}>
               {p.image_url && <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
               <div className="absolute inset-0 bg-black/10 transition-opacity group-hover:opacity-0" />
               {p.tag && <span className="absolute left-3 top-3 rounded-full bg-background/80 px-2 py-1 text-[10px] font-semibold backdrop-blur">{p.tag}</span>}
               <span className="absolute right-3 top-3 rounded-full bg-background/80 px-2 py-1 text-[10px] font-medium backdrop-blur">
                 {TYPE_LABEL[p.type] ?? p.type}
               </span>
-            </div>
+            </Link>
             <div className="p-5">
-              <div className="font-display text-lg font-semibold">{p.name}</div>
+              <div className="font-display text-lg font-semibold"><Link to={p.productPath ?? "/catalogo"}>{p.name}</Link></div>
               <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{p.description}</p>
               <div className="mt-4 flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
-                  {p.hasSale && (
+                  {p.hasSale && p.basePrice != null && (
                     <span className="font-mono text-sm text-muted-foreground line-through">${p.basePrice.toLocaleString("es-CL")}</span>
                   )}
-                  <span className="font-mono text-lg font-bold text-neon-green">${p.price.toLocaleString("es-CL")}</span>
+                  {p.price != null && <span className="font-mono text-lg font-bold text-neon-green">${p.price.toLocaleString("es-CL")}</span>}
                 </div>
                 <Link
                   to="/personalizador"

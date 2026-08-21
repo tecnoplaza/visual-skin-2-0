@@ -3,6 +3,8 @@ import type {} from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { renderSitemap } from "@/lib/seo";
+import { sitemapPathsWithProducts } from "@/lib/product-seo";
+import type { PromoPack } from "@/lib/cms";
 
 export const BASE_PATHS = [
   { path: "/", changefreq: "weekly", priority: "1.0" },
@@ -44,6 +46,12 @@ export const Route = createFileRoute("/sitemap.xml")({
               const status = (row.value as any)?.status;
               if (spec && status === "published") paths.push(spec);
             }
+            const { data: packs, error: packsError } = await supabase
+              .from("promo_packs")
+              .select("id,name,description,price,sale_price,image_url,gradient,tag,pack_type,includes,features,button_label,button_url,is_active,sort_order")
+              .eq("is_active", true)
+              .order("sort_order");
+            if (!packsError) paths.splice(0, paths.length, ...sitemapPathsWithProducts(paths, (packs ?? []) as PromoPack[]));
           }
         } catch {
           // ignore, base sitemap still returned

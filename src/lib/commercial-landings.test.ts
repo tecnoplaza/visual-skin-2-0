@@ -54,7 +54,7 @@ test("cada landing tiene un H1 y contenido comercial propio", () => {
   assert.match(component, /initialPacks/);
   assert.match(component, /pack\.name/);
   assert.match(component, /pack\.description/);
-  assert.match(component, /sale_price \?\? pack\.price/);
+  assert.match(component, /canonicalPromoPackPricing\(pack\)/);
 });
 
 test("los filtros usan exclusivamente tipos reales y no inventan prendas individuales", () => {

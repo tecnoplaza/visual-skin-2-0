@@ -25,7 +25,7 @@ export type SeoMetadataInput = {
   pathname: string;
   title: string;
   description: string;
-  type?: "website" | "article";
+  type?: "website" | "article" | "product";
   image?: string;
 };
 

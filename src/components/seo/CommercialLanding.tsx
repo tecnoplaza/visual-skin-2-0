@@ -3,6 +3,7 @@ import { ArrowRight, Check, Palette, Smartphone, Upload } from "lucide-react";
 import { usePromoPacks, type PromoPack } from "@/lib/cms";
 import { breadcrumbJsonLd, canonicalUrl, serializeJsonLd, type BreadcrumbEntry } from "@/lib/seo";
 import { COMMERCIAL_LANDINGS, packsForLanding, type CommercialLandingSlug } from "@/lib/commercial-landings";
+import { canonicalPromoPackPricing, productPathForPack } from "@/lib/product-seo";
 
 type Props = { slug: CommercialLandingSlug; initialPacks: PromoPack[] };
 
@@ -27,7 +28,7 @@ export function CommercialLanding({ slug, initialPacks }: Props) {
             "@type": "ListItem",
             position: index + 1,
             name: pack.name,
-            url: `${canonicalUrl(`/${slug}`)}#pack-${encodeURIComponent(pack.id)}`,
+            url: canonicalUrl(productPathForPack(pack) ?? `/${slug}`),
           })),
         }] : []),
       {
@@ -155,20 +156,20 @@ export function CommercialLanding({ slug, initialPacks }: Props) {
 }
 
 function CommercialPackCard({ pack }: { pack: PromoPack }) {
-  const price = Number(pack.sale_price ?? pack.price);
-  const hasSale = pack.sale_price != null && Number(pack.sale_price) < Number(pack.price);
+  const pricing = canonicalPromoPackPricing(pack);
+  const productPath = productPathForPack(pack);
   return (
     <article id={`pack-${pack.id}`} className="flex scroll-mt-24 overflow-hidden rounded-2xl border border-border bg-card transition-colors hover:border-neon-blue/50 sm:flex-col">
-      <div className={`relative aspect-square w-32 shrink-0 bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"} sm:w-full`}>
+      <Link to={productPath ?? "/packs-personalizados"} className={`relative block aspect-square w-32 shrink-0 bg-gradient-to-br ${pack.gradient || "from-neon-blue/20 to-neon-green/20"} sm:w-full`}>
         {pack.image_url && <img src={pack.image_url} alt={pack.name} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
-      </div>
+      </Link>
       <div className="flex min-w-0 flex-1 flex-col p-4">
-        <h3 className="font-display text-lg font-semibold">{pack.name}</h3>
+        <h3 className="font-display text-lg font-semibold"><Link to={productPath ?? "/packs-personalizados"}>{pack.name}</Link></h3>
         {pack.description && <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{pack.description}</p>}
-        <div className="mt-auto flex flex-wrap items-baseline gap-2 pt-4">
-          <strong className="font-mono text-lg text-neon-green">${price.toLocaleString("es-CL")} CLP</strong>
-          {hasSale && <span className="text-xs text-muted-foreground line-through">${Number(pack.price).toLocaleString("es-CL")}</span>}
-        </div>
+        {pricing && <div className="mt-auto flex flex-wrap items-baseline gap-2 pt-4">
+          <strong className="font-mono text-lg text-neon-green">${pricing.effectivePrice.toLocaleString("es-CL")} CLP</strong>
+          {pricing.hasSale && <span className="text-xs text-muted-foreground line-through">${pricing.basePrice.toLocaleString("es-CL")}</span>}
+        </div>}
         <Link to="/personalizador" search={{ pack: pack.pack_type, id: pack.id } as any} className="mt-3 inline-flex items-center justify-center rounded-lg border border-neon-blue/50 px-4 py-2 text-sm font-semibold text-neon-blue">
           Personalizar
         </Link>
